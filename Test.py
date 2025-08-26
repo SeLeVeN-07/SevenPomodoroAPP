@@ -28,7 +28,6 @@ import uuid
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
 # Configuración de la página
 st.set_page_config(
     page_title="Pomodoro Pro",
@@ -42,9 +41,6 @@ SUPABASE_URL = os.getenv('SUPABASE_URL', "https://taqwrznjapdylanpcabg.supabase.
 SUPABASE_KEY = os.getenv('SUPABASE_KEY', "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhcXdyem5qYXBkeWxhbnBjYWJnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYyMjgwNTksImV4cCI6MjA3MTgwNDA1OX0.8qEeAe1iUp3V2kfZK4KgxS5XSKAaQS9_URqH7lgXWG8")
 
 @st.cache_resource
-
-# Añade esto al principio de tu aplicación para probar la conexión
-    st.error(f"❌ Error de conexión: {str(e)}")
 def init_supabase():
     try:
         client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -57,13 +53,18 @@ def init_supabase():
         st.error(f"Error de conexión: {str(e)}")
         return None
 
+# Inicializar Supabase
 supabase = init_supabase()
 
-try:
-    # Intenta una consulta simple para verificar la conexión
-    test_response = supabase.table('user_profiles').select('*').limit(1).execute()
-    st.success("✅ Conexión a Supabase exitosa")
-except Exception as e:
+# Prueba de conexión (después de inicializar supabase)
+if supabase is not None:
+    try:
+        test_response = supabase.table('user_profiles').select('*').limit(1).execute()
+        st.success("✅ Conexión a Supabase exitosa")
+    except Exception as e:
+        st.error(f"❌ Error de conexión: {str(e)}")
+else:
+    st.error("❌ No se pudo inicializar Supabase")
 # Constantes y configuración
 THEMES = {
     'Claro': {
