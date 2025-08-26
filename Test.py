@@ -304,7 +304,56 @@ def auth_section():
 # ==============================================
 # Funciones de persistencia mejoradas
 # ==============================================
+def load_user_data():
+    if 'user' not in st.session_state or not st.session_state.user:
+        logger.warning("Intento de carga sin usuario autenticado")
+        return None
 
+    try:
+        # Obtener user_id de forma segura
+        user_id = str(getattr(st.session_state.user.user, 'id', ''))
+        if not user_id:
+            logger.error("No se pudo obtener user_id")
+            return None
+
+        # Verificar conexión a Supabase
+        if not supabase:
+            logger.error("Conexión a Supabase no establecida")
+            return None
+
+        # Intento de carga con reintentos
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Intento de carga {attempt + 1}/{max_retries}")
+                
+                response = supabase.table('user_data').select('*').eq(
+                    'user_id', user_id
+                ).execute()
+
+                if not response.data:
+                    logger.info("No se encontraron datos para este usuario")
+                    return None
+                
+                # Verificar estructura básica de los datos
+                if 'pomodoro_data' not in response.data[0]:
+                    logger.error("Estructura de datos inválida en Supabase")
+                    return None
+                
+                logger.info("Datos cargados exitosamente desde Supabase")
+                return response.data[0]['pomodoro_data']
+
+            except Exception as e:
+                logger.error(f"Intento {attempt + 1} fallido: {str(e)}")
+                if attempt == max_retries - 1:
+                    raise  # Relanzar el error después del último intento
+                time.sleep(1)  # Esperar antes de reintentar
+
+    except Exception as e:
+        logger.error(f"Error al cargar datos del usuario: {str(e)}", exc_info=True)
+        st.error("Error al cargar datos. Usando configuración por defecto.")
+        return None
+        
 def save_user_data():
     """
     Guarda el estado actual de la aplicación en Supabase.
@@ -1388,6 +1437,10 @@ def sidebar():
             st.rerun()
 
 def main():
+    """
+    Función principal que maneja el flujo de la aplicación Pomodoro Pro.
+    Controla la inicialización del estado, autenticación y navegación entre pestañas.
+    """
     # Inicialización del estado con verificación de integridad
     if 'pomodoro_state' not in st.session_state:
         # Cargar estado por defecto
@@ -1396,26 +1449,35 @@ def main():
         # Cargar datos del usuario si está autenticado
         if 'user' in st.session_state and st.session_state.user:
             try:
+                logger.info("Iniciando carga de datos del usuario...")
+                
+                # 1. Cargar datos principales
                 user_data = load_user_data()
                 if user_data:
+                    logger.info("Datos principales encontrados, validando...")
+                    
                     # Combinar con valores por defecto para campos faltantes
                     for key in st.session_state.pomodoro_state:
                         if key in user_data:
-                            st.session_state.pomodoro_state[key] = user_data[key]
+                            try:
+                                st.session_state.pomodoro_state[key] = user_data[key]
+                            except Exception as e:
+                                logger.warning(f"Error al cargar {key}: {str(e)}")
                     
                     # Validar y limpiar el estado cargado
                     st.session_state.pomodoro_state = validate_state(st.session_state.pomodoro_state)
                     
-                    # Cargar perfil de usuario
+                    # 2. Cargar perfil de usuario
                     profile = load_user_profile()
                     if profile:
                         st.session_state.pomodoro_state['username'] = profile.get('username', '')
                         st.session_state.pomodoro_state['display_name'] = profile.get('display_name', '')
+                        logger.info("Perfil de usuario cargado correctamente")
                 
                 logger.info("Estado inicializado y validado")
                 
             except Exception as e:
-                logger.error(f"Error al inicializar estado: {str(e)}")
+                logger.error(f"Error al inicializar estado: {str(e)}", exc_info=True)
                 st.error("Error al cargar datos. Usando configuración por defecto.")
                 st.session_state.pomodoro_state = get_default_state()
     
@@ -1425,6 +1487,7 @@ def main():
             # Verificar si el token sigue siendo válido
             user = supabase.auth.get_user()
             if not user:
+                logger.warning("Sesión inválida, limpiando estado...")
                 st.session_state.user = None
                 st.session_state.pomodoro_state = None
                 st.rerun()
@@ -1434,18 +1497,19 @@ def main():
             st.session_state.pomodoro_state = None
             st.rerun()
     
-    # Barra lateral
+    # Barra lateral - navegación y autenticación
     sidebar()
     
-    # Contenido principal
+    # Contenido principal basado en el estado de autenticación
     if 'user' in st.session_state and st.session_state.user:
         try:
-            # Guardado automático
+            # Guardado automático periódico
             auto_save()
             
             # Mostrar pestaña seleccionada
             current_tab = st.session_state.get('current_tab', "🍅 Temporizador")
             
+            # Renderizar la pestaña correspondiente
             if current_tab == "🍅 Temporizador":
                 timer_tab()
             elif current_tab == "📋 Tareas":
@@ -1462,7 +1526,7 @@ def main():
                 st.session_state.last_validation = datetime.datetime.now()
                 
         except Exception as e:
-            logger.error(f"Error en la interfaz principal: {str(e)}")
+            logger.error(f"Error en la interfaz principal: {str(e)}", exc_info=True)
             st.error("¡Oops! Algo salió mal. Por favor recarga la página.")
             if st.button("Recargar aplicación"):
                 st.session_state.clear()
@@ -1470,80 +1534,88 @@ def main():
     
     else:
         # Pantalla de bienvenida para usuarios no autenticados
-        st.title("🍅 Pomodoro Pro")
-        st.markdown("""
-        ### ¡Bienvenido a Pomodoro Pro!
-        
-        Para comenzar:
-        1. Crea una cuenta o inicia sesión en la barra lateral
-        2. Configura tus tiempos preferidos
-        3. Comienza a mejorar tu productividad
-        
-        **Características:**
-        - Temporizador Pomodoro personalizable
-        - Gestión de tareas y proyectos
-        - Seguimiento de tu progreso
-        - Estadísticas detalladas
-        - Almacenamiento en la nube
-        - Perfil de usuario personalizable
-        """)
-        
-        # Sección de demostración
-        st.divider()
-        st.subheader("Demostración del Temporizador")
-        
-        # Mostrar un temporizador de ejemplo (solo visualización)
-        demo_time = st.slider("Tiempo de demostración (minutos)", 1, 60, 25)
-        demo_phase = st.selectbox("Fase de demostración", ["Trabajo", "Descanso Corto", "Descanso Largo"])
-        
-        # Visualización del temporizador de demo
-        theme = THEMES['Claro']  # Usar tema claro para la demo
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=demo_time * 60,
-            number={'suffix': "s", 'font': {'size': 40}},
-            gauge={
-                'axis': {'range': [0, demo_time * 60], 'visible': False},
-                'bar': {'color': get_phase_color(demo_phase)},
-                'steps': [{'range': [0, demo_time * 60], 'color': theme['circle_bg']}]
-            },
-            domain={'x': [0, 1], 'y': [0, 1]},
-            title={'text': f"{demo_phase} - {format_time(demo_time * 60)}", 'font': {'size': 24}}
-        ))
-        fig.update_layout(height=300, margin=dict(l=10, r=10, t=80, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Sección de información adicional
-        st.divider()
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("¿Qué es Pomodoro?")
-            st.markdown("""
-            La Técnica Pomodoro es un método de gestión del tiempo que:
-            - Divide el trabajo en intervalos de 25 minutos
-            - Separa cada intervalo con breves descansos
-            - Mejora la concentración y productividad
-            - Reduce la fatiga mental
-            """)
-        
-        with col2:
-            st.subheader("Beneficios Clave")
-            st.markdown("""
-            - ✅ Mayor enfoque en las tareas
-            - ⏱️ Mejor gestión del tiempo
-            - 📈 Seguimiento de tu progreso
-            - 🧠 Menos estrés y fatiga
-            """)
-        
-        # Footer
-        st.divider()
-        st.markdown("""
-        <div style="text-align: center; color: #666; font-size: 0.9em;">
-        Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
-        </div>
-        """, unsafe_allow_html=True)
+        render_welcome_screen()
 
+def render_welcome_screen():
+    """Renderiza la pantalla de bienvenida para usuarios no autenticados"""
+    st.title("🍅 Pomodoro Pro")
+    st.markdown("""
+    ### ¡Bienvenido a Pomodoro Pro!
+    
+    Para comenzar:
+    1. Crea una cuenta o inicia sesión en la barra lateral
+    2. Configura tus tiempos preferidos
+    3. Comienza a mejorar tu productividad
+    
+    **Características:**
+    - Temporizador Pomodoro personalizable
+    - Gestión de tareas y proyectos
+    - Seguimiento de tu progreso
+    - Estadísticas detalladas
+    - Almacenamiento en la nube
+    - Perfil de usuario personalizable
+    """)
+    
+    # Sección de demostración
+    st.divider()
+    st.subheader("Demostración del Temporizador")
+    render_demo_timer()
+    
+    # Sección de información adicional
+    st.divider()
+    render_info_sections()
+    
+    # Footer
+    st.divider()
+    st.markdown("""
+    <div style="text-align: center; color: #666; font-size: 0.9em;">
+    Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
+    </div>
+    """, unsafe_allow_html=True)
+
+def render_demo_timer():
+    """Renderiza el temporizador de demostración"""
+    demo_time = st.slider("Tiempo de demostración (minutos)", 1, 60, 25)
+    demo_phase = st.selectbox("Fase de demostración", ["Trabajo", "Descanso Corto", "Descanso Largo"])
+    
+    theme = THEMES['Claro']
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=demo_time * 60,
+        number={'suffix': "s", 'font': {'size': 40}},
+        gauge={
+            'axis': {'range': [0, demo_time * 60], 'visible': False},
+            'bar': {'color': get_phase_color(demo_phase)},
+            'steps': [{'range': [0, demo_time * 60], 'color': theme['circle_bg']}]
+        },
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': f"{demo_phase} - {format_time(demo_time * 60)}", 'font': {'size': 24}}
+    ))
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=80, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_info_sections():
+    """Renderiza las secciones de información"""
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("¿Qué es Pomodoro?")
+        st.markdown("""
+        La Técnica Pomodoro es un método de gestión del tiempo que:
+        - Divide el trabajo en intervalos de 25 minutos
+        - Separa cada intervalo con breves descansos
+        - Mejora la concentración y productividad
+        - Reduce la fatiga mental
+        """)
+    
+    with col2:
+        st.subheader("Beneficios Clave")
+        st.markdown("""
+        - ✅ Mayor enfoque en las tareas
+        - ⏱️ Mejor gestión del tiempo
+        - 📈 Seguimiento de tu progreso
+        - 🧠 Menos estrés y fatiga
+        """)
 if __name__ == "__main__":
     # Verificar y mantener la sesión activa
     if 'user' in st.session_state and st.session_state.user:
@@ -1570,6 +1642,36 @@ if __name__ == "__main__":
             st.rerun()
 
 #####DEBUG################################################
+
+def debug_user_data():
+    if 'user' in st.session_state and st.session_state.user:
+        st.subheader("🔍 Debug - Carga de Datos")
+        
+        try:
+            user_id = str(st.session_state.user.user.id)
+            st.write(f"User ID: {user_id}")
+            
+            # Verificar conexión
+            st.write("Verificando conexión a Supabase...")
+            test = supabase.table('user_data').select('id').limit(1).execute()
+            st.write("Conexión exitosa:", bool(test.data))
+            
+            # Intentar cargar datos específicos
+            st.write("Intentando cargar datos...")
+            data = supabase.table('user_data').select('*').eq('user_id', user_id).execute()
+            
+            if data.data:
+                st.write("Datos encontrados:", data.data[0].keys())
+                st.json(data.data[0]['pomodoro_data'])
+            else:
+                st.warning("No se encontraron datos para este usuario")
+                
+        except Exception as e:
+            st.error(f"Error en debug: {str(e)}")
+
+# Llama a esta función después de iniciar sesión
+if 'user' in st.session_state and st.session_state.user:
+    debug_user_data()
 
 def debug_activities():
     if 'user' in st.session_state and st.session_state.user:
