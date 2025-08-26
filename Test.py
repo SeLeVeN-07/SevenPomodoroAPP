@@ -114,169 +114,33 @@ def get_default_state():
     }
 
 def validate_state(state):
-    """Valida y repara el estado cargado, asegurando consistencia de datos"""
-    default_state = get_default_state()
+    default = get_default_state()
     
-    # 1. Verificar que todos los campos obligatorios existan
-    for key in default_state:
-        if key not in state:
-            state[key] = default_state[key]
-            logger.warning(f"Campo faltante '{key}' restaurado a valor por defecto")
-    
-    # 2. Validar estructura de tareas
-    if not isinstance(state['tasks'], list):
-        state['tasks'] = []
-        logger.warning("Estructura de tareas inválida - reinicializada")
+    # Validar actividades
+    if 'activities' not in state or not isinstance(state['activities'], list):
+        state['activities'] = default['activities']
     else:
-        # Validar cada tarea individualmente
-        valid_tasks = []
-        for task in state['tasks']:
-            if not isinstance(task, dict):
-                continue
-                
-            valid_task = {
-                'id': task.get('id', str(uuid.uuid4())),
-                'name': task.get('name', 'Tarea sin nombre').strip(),
-                'description': task.get('description', '').strip(),
-                'priority': task.get('priority', 'Media') if task.get('priority') in ['Baja', 'Media', 'Alta'] else 'Media',
-                'due_date': task.get('due_date'),
-                'project': task.get('project', ''),
-                'completed': bool(task.get('completed', False)),
-                'created_at': task.get('created_at', datetime.datetime.now().isoformat()),
-                'completed_at': task.get('completed_at')
-            }
-            
-            # Validar fecha de vencimiento
-            if valid_task['due_date']:
-                try:
-                    if isinstance(valid_task['due_date'], str):
-                        valid_task['due_date'] = datetime.date.fromisoformat(valid_task['due_date'])
-                    elif not isinstance(valid_task['due_date'], (datetime.date, datetime.datetime)):
-                        valid_task['due_date'] = None
-                except ValueError:
-                    valid_task['due_date'] = None
-            
-            valid_tasks.append(valid_task)
-        
-        state['tasks'] = valid_tasks
+        # Filtrar actividades no string
+        state['activities'] = [a for a in state['activities'] if isinstance(a, str)]
+        # Asegurar actividades mínimas
+        if 'Trabajo' not in state['activities']:
+            state['activities'].insert(0, 'Trabajo')
     
-    # 3. Validar estructura de proyectos
-    if not isinstance(state['projects'], list):
-        state['projects'] = []
-        logger.warning("Estructura de proyectos inválida - reinicializada")
-    else:
-        valid_projects = []
-        existing_names = set()
-        
-        for project in state['projects']:
-            if not isinstance(project, dict):
-                continue
-                
-            # Generar ID si no existe
-            if 'id' not in project or not project['id']:
-                project['id'] = str(uuid.uuid4())
-            
-            # Validar nombre
-            name = project.get('name', '').strip()
-            if not name:
-                name = f"Proyecto {len(valid_projects) + 1}"
-            
-            # Evitar duplicados
-            lower_name = name.lower()
-            if lower_name in existing_names:
-                name = f"{name} ({project['id'][:4]})"
-                lower_name = name.lower()
-            
-            existing_names.add(lower_name)
-            
-            valid_projects.append({
-                'id': project['id'],
-                'name': name,
-                'created_at': project.get('created_at', datetime.datetime.now().isoformat()),
-                'task_count': project.get('task_count', 0)
-            })
-        
-        state['projects'] = valid_projects
-    
-    # 4. Validar sesiones de historial
-    if not isinstance(state['session_history'], list):
-        state['session_history'] = []
-    else:
-        valid_history = []
-        for session in state['session_history']:
-            if not isinstance(session, dict):
-                continue
-                
-            valid_session = {
-                'Fecha': session.get('Fecha'),
-                'Hora Inicio': session.get('Hora Inicio', ''),
-                'Tiempo Activo (min)': float(session.get('Tiempo Activo (min)', 0)),
-                'Actividad': session.get('Actividad', '')
-            }
-            
-            # Validar fecha
-            if valid_session['Fecha']:
-                try:
-                    if isinstance(valid_session['Fecha'], str):
-                        valid_session['Fecha'] = datetime.date.fromisoformat(valid_session['Fecha'])
-                    elif not isinstance(valid_session['Fecha'], (datetime.date, datetime.datetime)):
-                        valid_session['Fecha'] = datetime.date.today()
-                except ValueError:
-                    valid_session['Fecha'] = datetime.date.today()
-            
-            valid_history.append(valid_session)
-        
-        # Ordenar por fecha (más reciente primero)
-        state['session_history'] = sorted(
-            valid_history,
-            key=lambda x: x['Fecha'] if x['Fecha'] else datetime.date.min,
-            reverse=True
-        )[:1000]  # Limitar a 1000 registros
-    
-    # 5. Validar logros
-    if not isinstance(state['achievements'], dict):
-        state['achievements'] = default_state['achievements']
-    else:
-        for key in default_state['achievements']:
-            if key not in state['achievements']:
-                state['achievements'][key] = default_state['achievements'][key]
-    
-    # 6. Validar fechas importantes
-    date_fields = ['last_session_date', 'start_time', 'paused_time']
-    for field in date_fields:
-        if field in state and state[field]:
-            try:
-                if isinstance(state[field], str):
-                    state[field] = datetime.datetime.fromisoformat(state[field])
-                elif not isinstance(state[field], (datetime.date, datetime.datetime)):
-                    state[field] = None
-            except ValueError:
-                state[field] = None
-    
-    # 7. Validar configuración del temporizador
+    # Validar configuración del temporizador
     timer_settings = [
-        ('work_duration', 25 * 60, 1 * 60, 120 * 60),
-        ('short_break', 5 * 60, 1 * 60, 30 * 60),
-        ('long_break', 15 * 60, 5 * 60, 60 * 60),
+        ('work_duration', 25*60, 5*60, 120*60),
+        ('short_break', 5*60, 1*60, 30*60),
+        ('long_break', 15*60, 5*60, 60*60),
         ('sessions_before_long', 4, 1, 10),
         ('total_sessions', 8, 1, 20)
     ]
     
-    for setting, default, min_val, max_val in timer_settings:
-        if not isinstance(state[setting], (int, float)) or not (min_val <= state[setting] <= max_val):
-            state[setting] = default
-            logger.warning(f"Configuración inválida '{setting}' - restaurada a valor por defecto")
+    for setting, default_val, min_val, max_val in timer_settings:
+        if setting not in state or not isinstance(state[setting], (int, float)) or not (min_val <= state[setting] <= max_val):
+            state[setting] = default_val
     
-    # 8. Validar fase actual
-    if state['current_phase'] not in ['Trabajo', 'Descanso Corto', 'Descanso Largo']:
-        state['current_phase'] = 'Trabajo'
-    
-    # 9. Validar tema
-    if state['current_theme'] not in THEMES:
-        state['current_theme'] = 'Claro'
-    
-    # 10. Actualizar versión de datos
-    state['data_version'] = default_state['data_version']
+    # Validar versión de datos
+    state['data_version'] = default['data_version']
     
     return state
 
@@ -370,139 +234,118 @@ def auth_section():
 # ==============================================
 
 def save_user_data():
-    if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
+    if 'user' not in st.session_state or not st.session_state.user or 'pomodoro_state' not in st.session_state:
+        logger.warning("Intento de guardado sin usuario o estado pomodoro")
+        return False
+
+    try:
+        # Crear copia profunda del estado
+        state = deepcopy(st.session_state.pomodoro_state)
+        
+        # Serialización robusta de fechas
+        def serialize(obj):
+            if isinstance(obj, (datetime.datetime, datetime.date)):
+                return obj.isoformat()
+            elif isinstance(obj, (list, tuple)):
+                return [serialize(item) for item in obj]
+            elif isinstance(obj, dict):
+                return {k: serialize(v) for k, v in obj.items()}
+            return obj
+
+        serialized_data = serialize(state)
+        
+        # Verificación de user_id
         try:
-            # Convertir el estado a formato serializable
-            state = st.session_state.pomodoro_state.copy()
-            
-            # Función de serialización mejorada
-            def convert_datetime(obj):
-                if isinstance(obj, (datetime.datetime, datetime.date)):
-                    return obj.isoformat()
-                elif isinstance(obj, (list, tuple)):
-                    return [convert_datetime(item) for item in obj]
-                elif isinstance(obj, dict):
-                    return {k: convert_datetime(v) for k, v in obj.items()}
-                return obj
-            
-            serialized_data = convert_datetime(state)
-            
-            # Asegurar que el user_id sea UUID válido
-            try:
-                user_id = uuid.UUID(str(st.session_state.user.user.id))
-            except (ValueError, AttributeError) as e:
-                logger.error(f"ID de usuario inválido: {str(e)}")
-                return False
-
-            # Verificar que el email existe
-            if not hasattr(st.session_state.user.user, 'email') or not st.session_state.user.user.email:
-                logger.error("No se encontró email en el objeto de usuario")
-                return False
-
-            # Intento de guardado con verificación
-            try:
-                response = supabase.table('user_data').upsert({
-                    'user_id': str(user_id),
-                    'email': st.session_state.user.user.email,  # Asegurar que el email está incluido
-                    'pomodoro_data': serialized_data,
-                    'last_updated': datetime.datetime.now().isoformat()
-                }).execute()
-
-                if not response.data:
-                    logger.error("La respuesta de Supabase está vacía")
-                    return False
-
-                logger.info("Datos guardados exitosamente")
-                return True
-
-            except Exception as e:
-                logger.error(f"Error al guardar en Supabase: {str(e)}")
-                st.error("Error al guardar datos. Verifica la conexión.")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error inesperado: {str(e)}")
+            user_id = uuid.UUID(str(st.session_state.user.user.id))
+        except (ValueError, AttributeError) as e:
+            logger.error(f"ID de usuario inválido: {e}")
             return False
+
+        # Datos a guardar
+        data_to_save = {
+            'user_id': str(user_id),
+            'email': getattr(st.session_state.user.user, 'email', ''),
+            'pomodoro_data': serialized_data,
+            'last_updated': datetime.datetime.now().isoformat()
+        }
+
+        # Guardado con reintentos
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = supabase.table('user_data').upsert(data_to_save).execute()
+                
+                if response.data:
+                    logger.info(f"Datos guardados exitosamente. Intento {attempt + 1}")
+                    st.session_state.last_saved = datetime.datetime.now()
+                    return True
+                
+            except Exception as e:
+                logger.error(f"Intento {attempt + 1} fallido: {str(e)}")
+                if attempt == max_retries - 1:
+                    st.error("Error persistente al guardar. Intente más tarde.")
+                    return False
+                time.sleep(1)
+
+    except Exception as e:
+        logger.error(f"Error inesperado: {str(e)}", exc_info=True)
+        return False
     return False
 
 def load_user_data():
-    if 'user' in st.session_state and st.session_state.user:
-        try:
-            # Asegurarse de que el user_id sea un UUID válido
-            user_id = st.session_state.user.user.id
-            if not isinstance(user_id, uuid.UUID):
-                try:
-                    user_id = uuid.UUID(user_id)
-                except (ValueError, AttributeError):
-                    logger.error("ID de usuario no válido")
-                    return None
-            
-            # Intentar hasta 3 veces con reintentos
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    response = supabase.table('user_data').select('*').eq(
-                        'user_id', str(user_id)  # Convertir UUID a string para la consulta
-                    ).execute()
-                    
-                    if response.data:
-                        data = response.data[0]['pomodoro_data']
-                        
-                        def parse_datetime(obj):
-                            if isinstance(obj, str):
-                                try:
-                                    return datetime.datetime.fromisoformat(obj)
-                                except ValueError:
-                                    try:
-                                        return datetime.date.fromisoformat(obj)
-                                    except ValueError:
-                                        return obj
-                            elif isinstance(obj, (list, tuple)):
-                                return [parse_datetime(item) for item in obj]
-                            elif isinstance(obj, dict):
-                                return {k: parse_datetime(v) for k, v in obj.items()}
-                            return obj
-                        
-                        parsed_data = parse_datetime(data)
-                        logger.info("Datos cargados exitosamente")
-                        return parsed_data
-                    return None
-                except Exception as e:
-                    logger.warning(f"Intento {attempt + 1} fallido al cargar: {str(e)}")
-                    if attempt == max_retries - 1:
-                        logger.error(f"Error al cargar después de {max_retries} intentos: {str(e)}")
-                        st.error("Error al cargar datos. Intente recargar la página.")
-                        return None
-                    time.sleep(1)  # Esperar 1 segundo antes de reintentar
-        except Exception as e:
-            logger.error(f"Error inesperado al cargar: {str(e)}")
-            st.error("Error al cargar datos del usuario")
-    
-    return None
+    if 'user' not in st.session_state or not st.session_state.user:
+        return None
 
-def load_user_data():
-    if 'user' in st.session_state and st.session_state.user:
+    try:
+        # Verificar user_id
         try:
-            logger.info(f"Cargando datos para user_id: {st.session_state.user.user.id}")
-            
-            response = supabase.table('user_data').select('*').eq(
-                'user_id', st.session_state.user.user.id
-            ).execute()
-            
-            logger.info(f"Respuesta de BD: {response.data}")
-            
-            if response.data:
-                data = response.data[0]['pomodoro_data']
-                logger.info(f"Datos cargados: {data.get('current_activity')}")
-                return parse_datetime(data)
-            
-            logger.warning("No se encontraron datos para este usuario")
+            user_id = uuid.UUID(str(st.session_state.user.user.id))
+        except (ValueError, AttributeError) as e:
+            logger.error(f"ID de usuario inválido: {e}")
             return None
-            
-        except Exception as e:
-            logger.error(f"Error al cargar datos: {str(e)}", exc_info=True)
-            return None
-    return None
+
+        # Cargar datos con reintentos
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = supabase.table('user_data').select('*').eq(
+                    'user_id', str(user_id)
+                ).execute()
+
+                if response.data:
+                    data = response.data[0]['pomodoro_data']
+                    
+                    # Deserialización cuidadosa
+                    def parse_datetime(obj):
+                        if isinstance(obj, str):
+                            for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+                                try:
+                                    return datetime.datetime.strptime(obj, fmt)
+                                except ValueError:
+                                    continue
+                        elif isinstance(obj, (list, tuple)):
+                            return [parse_datetime(item) for item in obj]
+                        elif isinstance(obj, dict):
+                            return {k: parse_datetime(v) for k, v in obj.items()}
+                        return obj
+
+                    parsed_data = parse_datetime(data)
+                    logger.info("Datos cargados exitosamente")
+                    return parsed_data
+                
+                logger.warning("No se encontraron datos para este usuario")
+                return None
+
+            except Exception as e:
+                logger.error(f"Intento {attempt + 1} fallido: {str(e)}")
+                if attempt == max_retries - 1:
+                    st.error("Error al cargar datos. Intente recargar.")
+                    return None
+                time.sleep(1)
+
+    except Exception as e:
+        logger.error(f"Error inesperado: {str(e)}", exc_info=True)
+        return None
     
 def load_user_profile():
     if 'user' in st.session_state and st.session_state.user:
@@ -572,16 +415,26 @@ def update_user_profile(username, display_name):
     else:
         st.error("No hay usuario autenticado")
         return False
+
 def auto_save():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
-            if 'last_saved' not in st.session_state or (datetime.datetime.now() - st.session_state.last_saved).seconds > 15:
-                logger.info("Auto-guardando datos...")
+            if 'last_saved' not in st.session_state or \
+               (datetime.datetime.now() - st.session_state.last_saved).total_seconds() > 15:
+                
+                logger.info("Auto-guardando cambios...")
                 if save_user_data():
-                    st.session_state.last_saved = datetime.datetime.now()
-                    logger.info("Auto-guardado exitoso")
+                    st.toast("Datos guardados", icon="💾")
         except Exception as e:
-            logger.error(f"Error en auto_save: {str(e)}")
+            logger.error(f"Error en auto-guardado: {str(e)}")
+
+def backup_state():
+    if 'pomodoro_state' in st.session_state:
+        try:
+            with open('pomodoro_backup.json', 'w') as f:
+                json.dump(st.session_state.pomodoro_state, f, default=str)
+        except Exception as e:
+            logger.error(f"Error en backup: {str(e)}")
 
 # ==============================================
 # Funciones del temporizador mejoradas
@@ -1529,6 +1382,31 @@ def main():
         Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
         </div>
         """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    # Verificar y mantener la sesión activa
+    if 'user' in st.session_state and st.session_state.user:
+        try:
+            # Verificar si el token sigue siendo válido
+            user = supabase.auth.get_user()
+            if not user:
+                st.session_state.user = None
+                st.session_state.pomodoro_state = None
+                st.rerun()
+        except Exception as e:
+            logger.error(f"Error al verificar sesión: {str(e)}")
+            st.session_state.user = None
+            st.session_state.pomodoro_state = None
+            st.rerun()
+    
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"Error crítico: {str(e)}")
+        st.error("¡Oops! Algo salió mal. Por favor recarga la página.")
+        if st.button("Recargar aplicación"):
+            st.session_state.clear()
+            st.rerun()
 
 #####DEBUG################################################
 # Agrega esto temporalmente para debug
