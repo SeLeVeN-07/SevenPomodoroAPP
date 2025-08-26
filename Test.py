@@ -114,21 +114,53 @@ def get_default_state():
     }
 
 def validate_state(state):
-    default = get_default_state()
+    """
+    Valida y repara el estado de la aplicación, asegurando que todos los campos necesarios existan
+    y tengan valores válidos.
     
-    # Validar actividades
+    Args:
+        state (dict): El estado actual de la aplicación
+        
+    Returns:
+        dict: Estado validado y reparado
+    """
+    # Obtener estado por defecto para comparación
+    default_state = get_default_state()
+    
+    # 1. Validar estructura básica del estado
+    if not isinstance(state, dict):
+        logger.warning("Estado inválido - reinicializando a valores por defecto")
+        return default_state
+    
+    # 2. Validar actividades
     if 'activities' not in state or not isinstance(state['activities'], list):
-        state['activities'] = default['activities']
+        state['activities'] = default_state['activities']
+        logger.warning("Actividades no válidas - restablecido a valores por defecto")
     else:
-        # Filtrar actividades no string
-        state['activities'] = [a for a in state['activities'] if isinstance(a, str)]
-        # Asegurar actividades mínimas
-        if 'Trabajo' not in state['activities']:
-            state['activities'].insert(0, 'Trabajo')
+        # Filtrar y limpiar actividades
+        cleaned_activities = []
+        for activity in state['activities']:
+            if isinstance(activity, (str, int, float)):
+                cleaned = str(activity).strip()
+                if cleaned and cleaned not in cleaned_activities:  # Evitar duplicados
+                    cleaned_activities.append(cleaned)
+        
+        # Asegurar actividades mínimas requeridas
+        required_activities = ['Trabajo']
+        for req_act in required_activities:
+            if req_act not in cleaned_activities:
+                cleaned_activities.insert(0, req_act)  # Insertar al inicio
+        
+        state['activities'] = cleaned_activities
+        
+        # Validar actividad actual
+        if 'current_activity' in state and state['current_activity']:
+            if state['current_activity'] not in state['activities']:
+                state['current_activity'] = ""
     
-    # Validar configuración del temporizador
+    # 3. Validar configuración del temporizador
     timer_settings = [
-        ('work_duration', 25*60, 5*60, 120*60),
+        ('work_duration', 25*60, 5*60, 120*60),  # (nombre, default, min, max)
         ('short_break', 5*60, 1*60, 30*60),
         ('long_break', 15*60, 5*60, 60*60),
         ('sessions_before_long', 4, 1, 10),
@@ -136,11 +168,51 @@ def validate_state(state):
     ]
     
     for setting, default_val, min_val, max_val in timer_settings:
-        if setting not in state or not isinstance(state[setting], (int, float)) or not (min_val <= state[setting] <= max_val):
+        if (setting not in state or 
+            not isinstance(state[setting], (int, float)) or 
+            not (min_val <= state[setting] <= max_val)):
             state[setting] = default_val
+            logger.warning(f"Configuración inválida '{setting}' - restaurada a valor por defecto")
     
-    # Validar versión de datos
-    state['data_version'] = default['data_version']
+    # 4. Validar fase actual
+    if 'current_phase' not in state or state['current_phase'] not in ['Trabajo', 'Descanso Corto', 'Descanso Largo']:
+        state['current_phase'] = 'Trabajo'
+    
+    # 5. Validar contadores y estadísticas
+    counters = [
+        'session_count', 'task_id_counter', 
+        'total_active_time', 'remaining_time'
+    ]
+    for counter in counters:
+        if counter not in state or not isinstance(state[counter], (int, float)):
+            state[counter] = default_state.get(counter, 0)
+    
+    # 6. Validar logros
+    if 'achievements' not in state or not isinstance(state['achievements'], dict):
+        state['achievements'] = default_state['achievements']
+    else:
+        for key in default_state['achievements']:
+            if key not in state['achievements'] or not isinstance(state['achievements'][key], (int, float)):
+                state['achievements'][key] = default_state['achievements'][key]
+    
+    # 7. Validar fechas importantes
+    date_fields = ['last_session_date', 'start_time', 'paused_time', 'timer_start', 'last_update']
+    for field in date_fields:
+        if field in state and state[field]:
+            try:
+                if isinstance(state[field], str):
+                    state[field] = datetime.datetime.fromisoformat(state[field])
+                elif not isinstance(state[field], (datetime.date, datetime.datetime)):
+                    state[field] = None
+            except ValueError:
+                state[field] = None
+    
+    # 8. Validar tema
+    if 'current_theme' not in state or state['current_theme'] not in THEMES:
+        state['current_theme'] = 'Claro'
+    
+    # 9. Actualizar versión de datos
+    state['data_version'] = default_state['data_version']
     
     return state
 
@@ -234,118 +306,99 @@ def auth_section():
 # ==============================================
 
 def save_user_data():
+    """
+    Guarda el estado actual de la aplicación en Supabase.
+    
+    Returns:
+        bool: True si el guardado fue exitoso, False si falló
+    """
+    # Verificar precondiciones
     if 'user' not in st.session_state or not st.session_state.user or 'pomodoro_state' not in st.session_state:
-        logger.warning("Intento de guardado sin usuario o estado pomodoro")
+        logger.warning("Intento de guardado sin usuario autenticado o estado pomodoro")
         return False
 
     try:
-        # Crear copia profunda del estado
-        state = deepcopy(st.session_state.pomodoro_state)
+        # 1. Validar y preparar el estado
+        state_to_save = validate_state(st.session_state.pomodoro_state.copy())
         
-        # Serialización robusta de fechas
-        def serialize(obj):
+        # 2. Serialización robusta de datos
+        def serialize_datetime(obj):
+            """Función recursiva para serializar objetos datetime"""
             if isinstance(obj, (datetime.datetime, datetime.date)):
                 return obj.isoformat()
             elif isinstance(obj, (list, tuple)):
-                return [serialize(item) for item in obj]
+                return [serialize_datetime(item) for item in obj]
             elif isinstance(obj, dict):
-                return {k: serialize(v) for k, v in obj.items()}
+                return {k: serialize_datetime(v) for k, v in obj.items()}
             return obj
 
-        serialized_data = serialize(state)
+        serialized_data = serialize_datetime(state_to_save)
         
-        # Verificación de user_id
+        # 3. Verificar y preparar user_id
         try:
-            user_id = uuid.UUID(str(st.session_state.user.user.id))
-        except (ValueError, AttributeError) as e:
-            logger.error(f"ID de usuario inválido: {e}")
+            user_id = str(st.session_state.user.user.id)
+            # Validar formato UUID si es necesario
+            try:
+                uuid.UUID(user_id)
+            except ValueError:
+                if not user_id.startswith('user_'):
+                    user_id = f"user_{user_id[-8:]}"
+        except Exception as e:
+            logger.error(f"Error al procesar user_id: {str(e)}")
             return False
 
-        # Datos a guardar
+        # 4. Preparar datos para Supabase
         data_to_save = {
-            'user_id': str(user_id),
+            'user_id': user_id,
             'email': getattr(st.session_state.user.user, 'email', ''),
             'pomodoro_data': serialized_data,
             'last_updated': datetime.datetime.now().isoformat()
         }
+        
+        logger.debug(f"Preparado para guardar: {data_to_save}")
 
-        # Guardado con reintentos
+        # 5. Intento de guardado con reintentos
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                logger.info(f"Intento de guardado {attempt + 1}/{max_retries}")
+                
+                # Usar upsert para crear o actualizar el registro
                 response = supabase.table('user_data').upsert(data_to_save).execute()
                 
-                if response.data:
-                    logger.info(f"Datos guardados exitosamente. Intento {attempt + 1}")
+                # Verificar respuesta
+                if response.data and len(response.data) > 0:
+                    logger.info("Datos guardados exitosamente en Supabase")
                     st.session_state.last_saved = datetime.datetime.now()
-                    return True
-                
-            except Exception as e:
-                logger.error(f"Intento {attempt + 1} fallido: {str(e)}")
-                if attempt == max_retries - 1:
-                    st.error("Error persistente al guardar. Intente más tarde.")
-                    return False
-                time.sleep(1)
-
-    except Exception as e:
-        logger.error(f"Error inesperado: {str(e)}", exc_info=True)
-        return False
-    return False
-
-def load_user_data():
-    if 'user' not in st.session_state or not st.session_state.user:
-        return None
-
-    try:
-        # Verificar user_id
-        try:
-            user_id = uuid.UUID(str(st.session_state.user.user.id))
-        except (ValueError, AttributeError) as e:
-            logger.error(f"ID de usuario inválido: {e}")
-            return None
-
-        # Cargar datos con reintentos
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = supabase.table('user_data').select('*').eq(
-                    'user_id', str(user_id)
-                ).execute()
-
-                if response.data:
-                    data = response.data[0]['pomodoro_data']
                     
-                    # Deserialización cuidadosa
-                    def parse_datetime(obj):
-                        if isinstance(obj, str):
-                            for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-                                try:
-                                    return datetime.datetime.strptime(obj, fmt)
-                                except ValueError:
-                                    continue
-                        elif isinstance(obj, (list, tuple)):
-                            return [parse_datetime(item) for item in obj]
-                        elif isinstance(obj, dict):
-                            return {k: parse_datetime(v) for k, v in obj.items()}
-                        return obj
-
-                    parsed_data = parse_datetime(data)
-                    logger.info("Datos cargados exitosamente")
-                    return parsed_data
-                
-                logger.warning("No se encontraron datos para este usuario")
-                return None
-
+                    # Debug: verificar datos guardados
+                    logger.debug(f"Respuesta de Supabase: {response.data}")
+                    return True
+                else:
+                    logger.warning("La respuesta de Supabase no contiene datos")
+                    continue
+                    
             except Exception as e:
-                logger.error(f"Intento {attempt + 1} fallido: {str(e)}")
+                error_msg = str(e)
+                logger.error(f"Intento {attempt + 1} fallido: {error_msg}")
+                
+                # Manejar errores específicos
+                if "null value in column" in error_msg:
+                    logger.error("Error de estructura de datos faltantes")
+                    break  # No reintentar si es error de estructura
+                    
                 if attempt == max_retries - 1:
-                    st.error("Error al cargar datos. Intente recargar.")
-                    return None
-                time.sleep(1)
+                    st.error("Error persistente al guardar. Verifica tu conexión.")
+                    return False
+                
+                time.sleep(1)  # Esperar antes de reintentar
 
     except Exception as e:
-        logger.error(f"Error inesperado: {str(e)}", exc_info=True)
-        return None
+        logger.error(f"Error inesperado en save_user_data: {str(e)}", exc_info=True)
+        st.error("Error crítico al guardar. Consulta los logs.")
+        return False
+    
+    return False
     
 def load_user_profile():
     if 'user' in st.session_state and st.session_state.user:
@@ -740,7 +793,40 @@ def delete_project(state, project_id):
         logger.error(f"Error al eliminar proyecto: {str(e)}")
         st.error("Error al eliminar proyecto")
         return False
-
+def add_activity(activity_name):
+    try:
+        if 'pomodoro_state' not in st.session_state:
+            st.error("Estado Pomodoro no inicializado")
+            return False
+            
+        if not activity_name or not isinstance(activity_name, str):
+            st.error("Nombre de actividad no válido")
+            return False
+            
+        # Verificar si la actividad ya existe
+        if activity_name in st.session_state.pomodoro_state['activities']:
+            st.warning(f"La actividad '{activity_name}' ya existe")
+            return True
+            
+        # Agregar la nueva actividad
+        st.session_state.pomodoro_state['activities'].append(activity_name)
+        
+        # Debug: mostrar estado antes de guardar
+        logger.info(f"Estado antes de guardar: {st.session_state.pomodoro_state['activities']}")
+        
+        # Forzar guardado
+        if save_user_data():
+            st.success(f"Actividad '{activity_name}' agregada correctamente")
+            return True
+        else:
+            st.error("Error al guardar los cambios")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error al agregar actividad: {str(e)}", exc_info=True)
+        st.error("Error técnico al agregar actividad. Verifica los logs.")
+        return False
+        
 # ==============================================
 # Interfaz de usuario mejorada
 # ==============================================
@@ -1190,8 +1276,69 @@ def settings_tab():
                 if state['current_activity'] == activity_to_remove:
                     state['current_activity'] = ""
                 save_user_data()
+        st.subheader("📝 Gestión de Actividades")
+    
+    # Lista actual de actividades
+    st.write("Actividades disponibles:")
+    activities = st.session_state.pomodoro_state.get('activities', [])
+    st.write(activities)
+    
+    # Formulario para agregar
+    with st.form("add_activity_form"):
+        new_activity = st.text_input("Nueva actividad", key="new_activity_input")
+        submitted = st.form_submit_button("➕ Agregar Actividad")
+        
+        if submitted:
+            if new_activity:
+                if add_activity(new_activity.strip()):
+                    st.rerun()
+            else:
+                st.warning("Ingresa un nombre para la actividad")
+    
+    # Opción para eliminar
+    if activities:
+        to_delete = st.selectbox("Selecciona actividad a eliminar", 
+                               [""] + activities,
+                               key="delete_activity_select")
+        
+        if to_delete and st.button("➖ Eliminar Actividad"):
+            if remove_activity(to_delete):
                 st.rerun()
-
+                
+def remove_activity(activity_name):
+    try:
+        if 'pomodoro_state' not in st.session_state:
+            return False
+            
+        if activity_name not in st.session_state.pomodoro_state['activities']:
+            st.warning(f"La actividad '{activity_name}' no existe")
+            return False
+            
+        # No permitir eliminar actividades básicas
+        protected_activities = ['Trabajo']
+        if activity_name in protected_activities:
+            st.error(f"No se puede eliminar la actividad '{activity_name}' (es requerida)")
+            return False
+            
+        # Eliminar la actividad
+        st.session_state.pomodoro_state['activities'].remove(activity_name)
+        
+        # Actualizar actividad actual si es necesario
+        if st.session_state.pomodoro_state['current_activity'] == activity_name:
+            st.session_state.pomodoro_state['current_activity'] = ""
+        
+        if save_user_data():
+            st.success(f"Actividad '{activity_name}' eliminada")
+            return True
+        else:
+            st.error("Error al guardar los cambios")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error al eliminar actividad: {str(e)}")
+        st.error("Error técnico al eliminar actividad")
+        return False
+        
 def sidebar():
     auth_section()
     
