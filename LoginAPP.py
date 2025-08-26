@@ -20,6 +20,36 @@ import gzip
 from collections import defaultdict
 from supabase import create_client, Client
 
+# En tu función principal o al inicio del script
+st.markdown("""
+    <script>
+        // Evitar el scroll automático
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                window.scrollTo(0, 0);
+            }, 100);
+        });
+        
+        // Mantener posición al actualizar
+        let lastScroll = 0;
+        document.addEventListener('scroll', function() {
+            lastScroll = window.scrollY;
+        });
+        
+        window.addEventListener('beforeunload', function() {
+            sessionStorage.setItem('scrollPos', lastScroll);
+        });
+        
+        window.addEventListener('load', function() {
+            const savedScroll = sessionStorage.getItem('scrollPos');
+            if (savedScroll) {
+                window.scrollTo(0, savedScroll);
+                sessionStorage.removeItem('scrollPos');
+            }
+        });
+    </script>
+""", unsafe_allow_html=True)
+
 # Configuración de la página
 st.set_page_config(
     page_title="Pomodoro Pro",
