@@ -768,7 +768,7 @@ def timer_tab():
             state['timer_paused'] = False
             st.rerun()
 
-    # Contador de sesiones
+        # Contador de sesiones
     st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
 
     # Actualizar el temporizador si está en ejecución
@@ -797,25 +797,24 @@ def timer_tab():
                     state['timer_running'] = False
                     state['timer_paused'] = False
                     st.rerun()
-        
-        # Determinar siguiente fase
-        state['current_phase'] = determine_next_phase(was_work)
-        state['remaining_time'] = get_phase_duration(state['current_phase'])
-        state['total_active_time'] = 0
-        st.success(f"¡Fase completada! Iniciando: {state['current_phase']}")
-        
-        # Mostrar notificación toast
-        if was_work:
-            st.toast("¡Pomodoro completado! Tómate un descanso.", icon="🎉")
-        else:
-            st.toast("¡Descanso completado! Volvamos al trabajo.", icon="💪")
-        
-        st.rerun()
+            
+            # Determinar siguiente fase
+            state['current_phase'] = determine_next_phase(was_work)
+            state['remaining_time'] = get_phase_duration(state['current_phase'])
+            state['total_active_time'] = 0
+            st.success(f"¡Fase completada! Iniciando: {state['current_phase']}")
+            
+            # Mostrar notificación toast
+            if was_work:
+                st.toast("¡Pomodoro completado! Tómate un descanso.", icon="🎉")
+            else:
+                st.toast("¡Descanso completado! Volvamos al trabajo.", icon="💪")
+            
+            st.rerun()
 
     # Forzar actualización de la interfaz
     time.sleep(0.1)
     st.rerun()
-
 # ==============================================
 # Pestaña de Estadísticas
 # ==============================================
