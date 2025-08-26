@@ -1367,15 +1367,16 @@ def sidebar():
 # ==============================================
 
 def main():
-    # Inicialización del estado de la sesión
+    # Inicialización del estado con carga desde Supabase
     if 'pomodoro_state' not in st.session_state:
-        # Cargar datos del usuario si está autenticado
         if 'user' in st.session_state and st.session_state.user:
-            user_data = load_user_data()
-            if user_data:
-                st.session_state.pomodoro_state = user_data
-            else:
-                st.session_state.pomodoro_state = get_default_state()
+            # Cargar datos existentes
+            loaded_data = load_user_data()
+            st.session_state.pomodoro_state = loaded_data if loaded_data else get_default_state()
+            
+            # Forzar guardado inicial si no existían datos
+            if not loaded_data:
+                save_user_data()
         else:
             st.session_state.pomodoro_state = get_default_state()
     
