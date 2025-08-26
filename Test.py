@@ -365,45 +365,79 @@ def auth_section():
 # ==============================================
 # Funciones de persistencia mejoradas
 # ==============================================
+# Añadir esta función y llamarla periódicamente
+def sync_data():
+    if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
+        try:
+            # Obtener última versión de los datos
+            remote_data = load_user_data()
+            if remote_data:
+                remote_time = datetime.datetime.fromisoformat(remote_data.get('last_updated', '1970-01-01'))
+                local_time = st.session_state.pomodoro_state.get('last_updated', datetime.datetime.min)
+                
+                if remote_time > local_time:
+                    # Fusionar datos inteligentemente
+                    st.session_state.pomodoro_state = merge_data(
+                        st.session_state.pomodoro_state, 
+                        remote_data
+                    )
+                    st.toast("Datos sincronizados desde la nube", icon="☁️")
+        except Exception as e:
+            logger.error(f"Error en sincronización: {str(e)}")
 
+def merge_data(local, remote):
+    """Fusión inteligente de datos locales y remotos"""
+    merged = local.copy()
+    
+    # Preferir datos más recientes
+    for key in remote:
+        if key not in merged or remote[key] is not None:
+            merged[key] = remote[key]
+    
+    # Mantener algunos datos locales importantes
+    if 'timer_running' in local:
+        merged['timer_running'] = local['timer_running']
+    if 'timer_paused' in local:
+        merged['timer_paused'] = local['timer_paused']
+    
+    return merged
+# Añadir esta función y llamarla periódicamente
+def check_connection():
+    try:
+        if supabase:
+            # Verificar si Supabase responde
+            supabase.table('user_data').select('*').limit(1).execute()
+            return True
+    except Exception as e:
+        logger.error(f"Error de conexión con Supabase: {str(e)}")
+        return False
+    return False
+
+# Modificar las funciones de guardado y carga
 def save_user_data():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
+            # Convertir el estado a JSON seguro
             state = st.session_state.pomodoro_state.copy()
+            serialized_data = json.dumps(state, default=str)  # Usar default=str para manejar datetime
             
-            # Convertir objetos datetime a strings ISO
-            def convert_datetime(obj):
-                if isinstance(obj, (datetime.datetime, datetime.date)):
-                    return obj.isoformat()
-                elif isinstance(obj, (list, tuple)):
-                    return [convert_datetime(item) for item in obj]
-                elif isinstance(obj, dict):
-                    return {k: convert_datetime(v) for k, v in obj.items()}
-                return obj
-            
-            serialized_data = convert_datetime(state)
-            
-            # Intentar guardar hasta 3 veces con reintentos
-            max_retries = 3
-            for attempt in range(max_retries):
+            # Intentar guardar con reintentos
+            for attempt in range(3):
                 try:
                     response = supabase.table('user_data').upsert({
                         'user_id': st.session_state.user.user.id,
-                        'email': st.session_state.user.user.email,
-                        'pomodoro_data': serialized_data,
+                        'pomodoro_data': json.loads(serialized_data),
                         'last_updated': datetime.datetime.now().isoformat()
                     }).execute()
                     
-                    st.session_state.last_saved = datetime.datetime.now()
-                    logger.info("Datos guardados exitosamente")
-                    return True
+                    if response.data:
+                        st.session_state.last_saved = datetime.datetime.now()
+                        return True
                 except Exception as e:
-                    logger.warning(f"Intento {attempt + 1} fallido al guardar: {str(e)}")
-                    if attempt == max_retries - 1:
-                        logger.error(f"Error al guardar después de {max_retries} intentos: {str(e)}")
-                        st.error("Error al guardar datos. Intente nuevamente.")
-                        return False
-                    time.sleep(1)  # Esperar 1 segundo antes de reintentar
+                    logger.error(f"Intento {attempt+1} fallido al guardar: {str(e)}")
+                    time.sleep(1)  # Esperar antes de reintentar
+            
+            return False
         except Exception as e:
             logger.error(f"Error inesperado al guardar: {str(e)}")
             return False
@@ -469,19 +503,19 @@ def load_user_profile():
     
     return None
 
+# Modificar la función auto_save()
 def auto_save():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
-            # Guardar cada 15 segundos o cuando hay cambios importantes
-            if ('last_saved' not in st.session_state or 
-                (datetime.datetime.now() - st.session_state.last_saved).seconds > 15 or
-                st.session_state.get('force_save', False)):
-                
+            # Guardar cada 5 segundos o cuando hay cambios importantes
+            now = datetime.datetime.now()
+            last_saved = st.session_state.get('last_saved', datetime.datetime.min)
+            
+            if (now - last_saved).total_seconds() > 5 or st.session_state.get('force_save', False):
                 if save_user_data():
-                    st.session_state.last_saved = datetime.datetime.now()
+                    st.session_state.last_saved = now
                     if 'force_save' in st.session_state:
                         del st.session_state['force_save']
-                    st.toast("Datos guardados", icon="💾")
         except Exception as e:
             logger.error(f"Error en auto-guardado: {str(e)}")
 
@@ -1265,44 +1299,78 @@ def sidebar():
             key='current_tab'
         )
         
-        # Cerrar sesión
-        if st.sidebar.button("Cerrar sesión"):
-            supabase.auth.sign_out()
-            st.session_state.clear()
-            st.rerun()
-
-def main():
-    # Inicialización del estado con verificación de integridad
-    if 'pomodoro_state' not in st.session_state:
-        # Cargar estado por defecto
-        st.session_state.pomodoro_state = get_default_state()
-        
-        # Cargar datos del usuario si está autenticado
-        if 'user' in st.session_state and st.session_state.user:
+        # Cerrar sesión con manejo mejorado
+        if st.sidebar.button("Cerrar sesión", key="logout_button"):
             try:
-                user_data = load_user_data()
-                if user_data:
-                    # Combinar con valores por defecto para campos faltantes
-                    for key in st.session_state.pomodoro_state:
-                        if key in user_data:
-                            st.session_state.pomodoro_state[key] = user_data[key]
+                # Mostrar indicador de progreso
+                with st.spinner("Guardando datos antes de cerrar sesión..."):
+                    # Guardar datos antes de cerrar
+                    if 'pomodoro_state' in st.session_state:
+                        if not save_user_data():
+                            st.error("No se pudieron guardar todos los datos. Intenta nuevamente.")
+                            return
                     
-                    # Validar y limpiar el estado cargado
-                    st.session_state.pomodoro_state = validate_state(st.session_state.pomodoro_state)
+                    # Pequeña pausa para asegurar el guardado
+                    time.sleep(0.5)
                     
-                    # Cargar perfil de usuario
+                    # Cerrar sesión en Supabase
+                    supabase.auth.sign_out()
+                    
+                    # Limpiar el estado de la sesión
+                    st.session_state.clear()
+                    
+                    # Mostrar mensaje de éxito
+                    st.toast("Sesión cerrada correctamente", icon="✅")
+                    
+                    # Recargar la aplicación
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error al cerrar sesión: {str(e)}")
+                logger.error(f"Error en cierre de sesión: {str(e)}")
+def main():
+    # Inicialización del estado con verificación mejorada
+    if 'pomodoro_state' not in st.session_state:
+        try:
+            # Mostrar indicador de carga
+            with st.spinner("Cargando datos..."):
+                # Primero intentar cargar de Supabase si el usuario está autenticado
+                if 'user' in st.session_state and st.session_state.user:
+                    user_data = load_user_data()
+                    
+                    if user_data:
+                        # Validar y limpiar los datos cargados
+                        validated_data = validate_state(user_data)
+                        st.session_state.pomodoro_state = validated_data
+                        logger.info("Datos cargados desde Supabase")
+                    else:
+                        # Usar estado por defecto si no hay datos
+                        st.session_state.pomodoro_state = get_default_state()
+                        logger.info("Usando estado por defecto (sin datos previos)")
+                    
+                    # Forzar guardado inicial para crear registro si no existe
+                    save_user_data()
+                    logger.info("Guardado inicial completado")
+                else:
+                    # Usuario no autenticado - estado por defecto
+                    st.session_state.pomodoro_state = get_default_state()
+                    logger.info("Estado inicializado para usuario no autenticado")
+                
+                # Cargar perfil de usuario si está autenticado
+                if 'user' in st.session_state and st.session_state.user:
                     profile = load_user_profile()
                     if profile:
                         st.session_state.pomodoro_state['username'] = profile.get('username', '')
                         st.session_state.pomodoro_state['display_name'] = profile.get('display_name', '')
-                
-                logger.info("Estado inicializado y validado")
-                
-            except Exception as e:
-                logger.error(f"Error al inicializar estado: {str(e)}")
-                st.error("Error al cargar datos. Usando configuración por defecto.")
-                st.session_state.pomodoro_state = get_default_state()
-    
+                        logger.info("Perfil de usuario cargado")
+        except Exception as e:
+            logger.error(f"Error crítico al inicializar estado: {str(e)}")
+            st.error("Error al cargar datos. Usando configuración por defecto.")
+            st.session_state.pomodoro_state = get_default_state()
+            
+            if st.button("Reintentar carga de datos"):
+                st.session_state.clear()
+                st.rerun()
+
     # Verificar y mantener la sesión activa
     if 'user' in st.session_state and st.session_state.user:
         try:
@@ -1427,6 +1495,7 @@ def main():
         Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
         </div>
         """, unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     # Verificar y mantener la sesión activa
