@@ -74,6 +74,7 @@ THEMES = {
 
 # Estado por defecto
 def get_default_state():
+    """Estado inicial con todos los campos necesarios"""
     return {
         'work_duration': 25 * 60,
         'short_break': 5 * 60,
@@ -99,7 +100,8 @@ def get_default_state():
             'pomodoros_completed': 0,
             'tasks_completed': 0,
             'streak_days': 0,
-            'total_hours': 0
+            'total_hours': 0,
+            'completed_projects': 0
         },
         'last_session_date': None,
         'session_history': [],
@@ -107,8 +109,176 @@ def get_default_state():
         'display_name': "",
         'task_id_counter': 0,
         'editing_task_id': None,
-        'editing_project_id': None
+        'editing_project_id': None,
+        'data_version': 2  # Versión del esquema de datos
     }
+
+def validate_state(state):
+    """Valida y repara el estado cargado, asegurando consistencia de datos"""
+    default_state = get_default_state()
+    
+    # 1. Verificar que todos los campos obligatorios existan
+    for key in default_state:
+        if key not in state:
+            state[key] = default_state[key]
+            logger.warning(f"Campo faltante '{key}' restaurado a valor por defecto")
+    
+    # 2. Validar estructura de tareas
+    if not isinstance(state['tasks'], list):
+        state['tasks'] = []
+        logger.warning("Estructura de tareas inválida - reinicializada")
+    else:
+        # Validar cada tarea individualmente
+        valid_tasks = []
+        for task in state['tasks']:
+            if not isinstance(task, dict):
+                continue
+                
+            valid_task = {
+                'id': task.get('id', str(uuid.uuid4())),
+                'name': task.get('name', 'Tarea sin nombre').strip(),
+                'description': task.get('description', '').strip(),
+                'priority': task.get('priority', 'Media') if task.get('priority') in ['Baja', 'Media', 'Alta'] else 'Media',
+                'due_date': task.get('due_date'),
+                'project': task.get('project', ''),
+                'completed': bool(task.get('completed', False)),
+                'created_at': task.get('created_at', datetime.datetime.now().isoformat()),
+                'completed_at': task.get('completed_at')
+            }
+            
+            # Validar fecha de vencimiento
+            if valid_task['due_date']:
+                try:
+                    if isinstance(valid_task['due_date'], str):
+                        valid_task['due_date'] = datetime.date.fromisoformat(valid_task['due_date'])
+                    elif not isinstance(valid_task['due_date'], (datetime.date, datetime.datetime)):
+                        valid_task['due_date'] = None
+                except ValueError:
+                    valid_task['due_date'] = None
+            
+            valid_tasks.append(valid_task)
+        
+        state['tasks'] = valid_tasks
+    
+    # 3. Validar estructura de proyectos
+    if not isinstance(state['projects'], list):
+        state['projects'] = []
+        logger.warning("Estructura de proyectos inválida - reinicializada")
+    else:
+        valid_projects = []
+        existing_names = set()
+        
+        for project in state['projects']:
+            if not isinstance(project, dict):
+                continue
+                
+            # Generar ID si no existe
+            if 'id' not in project or not project['id']:
+                project['id'] = str(uuid.uuid4())
+            
+            # Validar nombre
+            name = project.get('name', '').strip()
+            if not name:
+                name = f"Proyecto {len(valid_projects) + 1}"
+            
+            # Evitar duplicados
+            lower_name = name.lower()
+            if lower_name in existing_names:
+                name = f"{name} ({project['id'][:4]})"
+                lower_name = name.lower()
+            
+            existing_names.add(lower_name)
+            
+            valid_projects.append({
+                'id': project['id'],
+                'name': name,
+                'created_at': project.get('created_at', datetime.datetime.now().isoformat()),
+                'task_count': project.get('task_count', 0)
+            })
+        
+        state['projects'] = valid_projects
+    
+    # 4. Validar sesiones de historial
+    if not isinstance(state['session_history'], list):
+        state['session_history'] = []
+    else:
+        valid_history = []
+        for session in state['session_history']:
+            if not isinstance(session, dict):
+                continue
+                
+            valid_session = {
+                'Fecha': session.get('Fecha'),
+                'Hora Inicio': session.get('Hora Inicio', ''),
+                'Tiempo Activo (min)': float(session.get('Tiempo Activo (min)', 0)),
+                'Actividad': session.get('Actividad', '')
+            }
+            
+            # Validar fecha
+            if valid_session['Fecha']:
+                try:
+                    if isinstance(valid_session['Fecha'], str):
+                        valid_session['Fecha'] = datetime.date.fromisoformat(valid_session['Fecha'])
+                    elif not isinstance(valid_session['Fecha'], (datetime.date, datetime.datetime)):
+                        valid_session['Fecha'] = datetime.date.today()
+                except ValueError:
+                    valid_session['Fecha'] = datetime.date.today()
+            
+            valid_history.append(valid_session)
+        
+        # Ordenar por fecha (más reciente primero)
+        state['session_history'] = sorted(
+            valid_history,
+            key=lambda x: x['Fecha'] if x['Fecha'] else datetime.date.min,
+            reverse=True
+        )[:1000]  # Limitar a 1000 registros
+    
+    # 5. Validar logros
+    if not isinstance(state['achievements'], dict):
+        state['achievements'] = default_state['achievements']
+    else:
+        for key in default_state['achievements']:
+            if key not in state['achievements']:
+                state['achievements'][key] = default_state['achievements'][key]
+    
+    # 6. Validar fechas importantes
+    date_fields = ['last_session_date', 'start_time', 'paused_time']
+    for field in date_fields:
+        if field in state and state[field]:
+            try:
+                if isinstance(state[field], str):
+                    state[field] = datetime.datetime.fromisoformat(state[field])
+                elif not isinstance(state[field], (datetime.date, datetime.datetime)):
+                    state[field] = None
+            except ValueError:
+                state[field] = None
+    
+    # 7. Validar configuración del temporizador
+    timer_settings = [
+        ('work_duration', 25 * 60, 1 * 60, 120 * 60),
+        ('short_break', 5 * 60, 1 * 60, 30 * 60),
+        ('long_break', 15 * 60, 5 * 60, 60 * 60),
+        ('sessions_before_long', 4, 1, 10),
+        ('total_sessions', 8, 1, 20)
+    ]
+    
+    for setting, default, min_val, max_val in timer_settings:
+        if not isinstance(state[setting], (int, float)) or not (min_val <= state[setting] <= max_val):
+            state[setting] = default
+            logger.warning(f"Configuración inválida '{setting}' - restaurada a valor por defecto")
+    
+    # 8. Validar fase actual
+    if state['current_phase'] not in ['Trabajo', 'Descanso Corto', 'Descanso Largo']:
+        state['current_phase'] = 'Trabajo'
+    
+    # 9. Validar tema
+    if state['current_theme'] not in THEMES:
+        state['current_theme'] = 'Claro'
+    
+    # 10. Actualizar versión de datos
+    state['data_version'] = default_state['data_version']
+    
+    return state
 
 # ==============================================
 # Funciones de autenticación mejoradas
@@ -201,6 +371,7 @@ def save_user_data():
         try:
             state = st.session_state.pomodoro_state.copy()
             
+            # Convertir objetos datetime a strings ISO
             def convert_datetime(obj):
                 if isinstance(obj, (datetime.datetime, datetime.date)):
                     return obj.isoformat()
@@ -212,48 +383,74 @@ def save_user_data():
             
             serialized_data = convert_datetime(state)
             
-            response = supabase.table('user_data').upsert({
-                'user_id': st.session_state.user.user.id,
-                'email': st.session_state.user.user.email,
-                'pomodoro_data': serialized_data,
-                'last_updated': datetime.datetime.now().isoformat()
-            }).execute()
-            
-            st.session_state.last_saved = datetime.datetime.now()
-            return True
+            # Intentar guardar hasta 3 veces con reintentos
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = supabase.table('user_data').upsert({
+                        'user_id': st.session_state.user.user.id,
+                        'email': st.session_state.user.user.email,
+                        'pomodoro_data': serialized_data,
+                        'last_updated': datetime.datetime.now().isoformat()
+                    }).execute()
+                    
+                    st.session_state.last_saved = datetime.datetime.now()
+                    logger.info("Datos guardados exitosamente")
+                    return True
+                except Exception as e:
+                    logger.warning(f"Intento {attempt + 1} fallido al guardar: {str(e)}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"Error al guardar después de {max_retries} intentos: {str(e)}")
+                        st.error("Error al guardar datos. Intente nuevamente.")
+                        return False
+                    time.sleep(1)  # Esperar 1 segundo antes de reintentar
         except Exception as e:
-            logger.error(f"Error al guardar: {str(e)}")
+            logger.error(f"Error inesperado al guardar: {str(e)}")
             return False
     return False
 
 def load_user_data():
     if 'user' in st.session_state and st.session_state.user:
         try:
-            response = supabase.table('user_data').select('*').eq(
-                'user_id', st.session_state.user.user.id
-            ).execute()
-            
-            if response.data:
-                data = response.data[0]['pomodoro_data']
-                
-                def parse_datetime(obj):
-                    if isinstance(obj, str):
-                        try:
-                            return datetime.datetime.fromisoformat(obj)
-                        except ValueError:
-                            try:
-                                return datetime.date.fromisoformat(obj)
-                            except ValueError:
-                                return obj
-                    elif isinstance(obj, (list, tuple)):
-                        return [parse_datetime(item) for item in obj]
-                    elif isinstance(obj, dict):
-                        return {k: parse_datetime(v) for k, v in obj.items()}
-                    return obj
-                
-                return parse_datetime(data)
+            # Intentar hasta 3 veces con reintentos
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = supabase.table('user_data').select('*').eq(
+                        'user_id', st.session_state.user.user.id
+                    ).execute()
+                    
+                    if response.data:
+                        data = response.data[0]['pomodoro_data']
+                        
+                        def parse_datetime(obj):
+                            if isinstance(obj, str):
+                                try:
+                                    return datetime.datetime.fromisoformat(obj)
+                                except ValueError:
+                                    try:
+                                        return datetime.date.fromisoformat(obj)
+                                    except ValueError:
+                                        return obj
+                            elif isinstance(obj, (list, tuple)):
+                                return [parse_datetime(item) for item in obj]
+                            elif isinstance(obj, dict):
+                                return {k: parse_datetime(v) for k, v in obj.items()}
+                            return obj
+                        
+                        parsed_data = parse_datetime(data)
+                        logger.info("Datos cargados exitosamente")
+                        return parsed_data
+                    return None
+                except Exception as e:
+                    logger.warning(f"Intento {attempt + 1} fallido al cargar: {str(e)}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"Error al cargar después de {max_retries} intentos: {str(e)}")
+                        st.error("Error al cargar datos. Intente recargar la página.")
+                        return None
+                    time.sleep(1)  # Esperar 1 segundo antes de reintentar
         except Exception as e:
-            logger.error(f"Error al cargar datos: {str(e)}")
+            logger.error(f"Error inesperado al cargar: {str(e)}")
             st.error("Error al cargar datos del usuario")
     
     return None
@@ -275,11 +472,16 @@ def load_user_profile():
 def auto_save():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
-            if 'last_saved' not in st.session_state or \
-               (datetime.datetime.now() - st.session_state.last_saved).seconds > 30:
+            # Guardar cada 15 segundos o cuando hay cambios importantes
+            if ('last_saved' not in st.session_state or 
+                (datetime.datetime.now() - st.session_state.last_saved).seconds > 15 or
+                st.session_state.get('force_save', False)):
+                
                 if save_user_data():
                     st.session_state.last_saved = datetime.datetime.now()
-                    st.toast("Datos guardados automáticamente", icon="💾")
+                    if 'force_save' in st.session_state:
+                        del st.session_state['force_save']
+                    st.toast("Datos guardados", icon="💾")
         except Exception as e:
             logger.error(f"Error en auto-guardado: {str(e)}")
 
@@ -319,16 +521,32 @@ def determine_next_phase(was_work):
     return "Descanso Corto"
 
 def update_timer(state):
-    if state['timer_running'] and not state['timer_paused']:
-        current_time = time.monotonic()
-        elapsed = current_time - state['last_update']
-        state['last_update'] = current_time
+    try:
+        if state['timer_running'] and not state['timer_paused']:
+            current_time = time.monotonic()
+            elapsed = current_time - state['last_update']
+            state['last_update'] = current_time
 
-        state['remaining_time'] -= elapsed
-        state['total_active_time'] += elapsed
+            state['remaining_time'] -= elapsed
+            state['total_active_time'] += elapsed
 
-        if state['remaining_time'] <= 0:
-            handle_phase_completion(state)
+            if state['remaining_time'] <= 0:
+                handle_phase_completion(state)
+    except Exception as e:
+        logger.error(f"Error en update_timer: {str(e)}")
+        st.error("Error en el temporizador. Reiniciando...")
+        reset_timer(state)
+
+def reset_timer(state):
+    state['timer_running'] = False
+    state['timer_paused'] = False
+    state['remaining_time'] = get_phase_duration(state['current_phase'])
+    state['total_active_time'] = 0
+    state['start_time'] = None
+    state['paused_time'] = None
+    state['timer_start'] = None
+    state['last_update'] = None
+    save_user_data()
 
 def handle_phase_completion(state):
     was_work = state['current_phase'] == "Trabajo"
@@ -392,76 +610,185 @@ def update_achievements(state, minutes):
 # ==============================================
 
 def generate_task_id(state):
-    state['task_id_counter'] += 1
-    return state['task_id_counter']
+    """Genera un ID único para tareas usando UUID"""
+    return str(uuid.uuid4())
 
 def add_task(state, name, description="", priority="Media", due_date=None, project=""):
-    task_id = generate_task_id(state)
-    task = {
-        'id': task_id,
-        'name': name,
-        'description': description,
-        'priority': priority,
-        'due_date': due_date,
-        'project': project,
-        'completed': False,
-        'created_at': datetime.datetime.now()
-    }
-    state['tasks'].append(task)
-    save_user_data()
-    return task
+    """
+    Añade una nueva tarea al estado con verificación de datos
+    """
+    try:
+        if not name or not isinstance(name, str):
+            raise ValueError("Nombre de tarea no válido")
+            
+        task = {
+            'id': generate_task_id(state),
+            'name': name.strip(),
+            'description': description.strip() if description else "",
+            'priority': priority if priority in ["Baja", "Media", "Alta"] else "Media",
+            'due_date': due_date if isinstance(due_date, (datetime.date, type(None))) else None,
+            'project': project if project in [p['id'] for p in state['projects']] else "",
+            'completed': False,
+            'created_at': datetime.datetime.now().isoformat(),
+            'completed_at': None
+        }
+        
+        state['tasks'].append(task)
+        st.session_state['force_save'] = True
+        logger.info(f"Tarea añadida: {task['name']}")
+        return task
+        
+    except Exception as e:
+        logger.error(f"Error al agregar tarea: {str(e)}")
+        st.error("Error al agregar tarea. Verifica los datos.")
+        return None
 
-def update_task(state, task_id, name, description, priority, due_date, project):
-    for task in state['tasks']:
-        if task['id'] == task_id:
-            task['name'] = name
-            task['description'] = description
-            task['priority'] = priority
-            task['due_date'] = due_date
-            task['project'] = project
-            save_user_data()
-            return True
-    return False
+def update_task(state, task_id, **kwargs):
+    """
+    Actualiza una tarea existente con validación de datos
+    """
+    try:
+        task = next((t for t in state['tasks'] if t['id'] == task_id), None)
+        if not task:
+            raise ValueError("Tarea no encontrada")
+            
+        # Validar y actualizar campos
+        if 'name' in kwargs:
+            task['name'] = kwargs['name'].strip() if kwargs['name'] else task['name']
+        
+        if 'description' in kwargs:
+            task['description'] = kwargs['description'].strip() if kwargs['description'] else task['description']
+        
+        if 'priority' in kwargs and kwargs['priority'] in ["Baja", "Media", "Alta"]:
+            task['priority'] = kwargs['priority']
+            
+        if 'due_date' in kwargs:
+            task['due_date'] = kwargs['due_date'] if isinstance(kwargs['due_date'], (datetime.date, type(None))) else task['due_date']
+            
+        if 'project' in kwargs:
+            task['project'] = kwargs['project'] if kwargs['project'] in [p['id'] for p in state['projects']] else task['project']
+            
+        if 'completed' in kwargs:
+            task['completed'] = bool(kwargs['completed'])
+            task['completed_at'] = datetime.datetime.now().isoformat() if kwargs['completed'] else None
+            if kwargs['completed']:
+                state['achievements']['tasks_completed'] += 1
+        
+        st.session_state['force_save'] = True
+        logger.info(f"Tarea actualizada: {task['name']}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error al actualizar tarea: {str(e)}")
+        st.error("Error al actualizar tarea")
+        return False
 
 def delete_task(state, task_id):
-    state['tasks'] = [task for task in state['tasks'] if task['id'] != task_id]
-    save_user_data()
-
-def complete_task(state, task_id):
-    for task in state['tasks']:
-        if task['id'] == task_id:
-            task['completed'] = True
-            task['completed_at'] = datetime.datetime.now()
-            state['achievements']['tasks_completed'] += 1
-            save_user_data()
+    """
+    Elimina una tarea con confirmación y registro
+    """
+    try:
+        initial_count = len(state['tasks'])
+        state['tasks'] = [t for t in state['tasks'] if t['id'] != task_id]
+        
+        if len(state['tasks']) < initial_count:
+            st.session_state['force_save'] = True
+            logger.info(f"Tarea eliminada: ID {task_id}")
             return True
-    return False
+        return False
+    except Exception as e:
+        logger.error(f"Error al eliminar tarea: {str(e)}")
+        return False
 
 def add_project(state, name):
-    project = {
-        'id': len(state['projects']) + 1,
-        'name': name
-    }
-    state['projects'].append(project)
-    save_user_data()
-    return project
+    """
+    Añade un nuevo proyecto con validación
+    """
+    try:
+        if not name or not isinstance(name, str) or len(name.strip()) < 3:
+            raise ValueError("Nombre de proyecto no válido")
+            
+        # Verificar si el proyecto ya existe
+        if any(p['name'].lower() == name.strip().lower() for p in state['projects']):
+            raise ValueError("El proyecto ya existe")
+            
+        project = {
+            'id': str(uuid.uuid4()),
+            'name': name.strip(),
+            'created_at': datetime.datetime.now().isoformat(),
+            'task_count': 0
+        }
+        
+        state['projects'].append(project)
+        st.session_state['force_save'] = True
+        logger.info(f"Proyecto añadido: {project['name']}")
+        return project
+        
+    except Exception as e:
+        logger.error(f"Error al agregar proyecto: {str(e)}")
+        st.error(f"No se pudo agregar el proyecto: {str(e)}")
+        return None
 
-def update_project(state, project_id, name):
-    for project in state['projects']:
-        if project['id'] == project_id:
-            project['name'] = name
-            save_user_data()
-            return True
-    return False
+def update_project(state, project_id, new_name):
+    """
+    Actualiza un proyecto existente
+    """
+    try:
+        project = next((p for p in state['projects'] if p['id'] == project_id), None)
+        if not project:
+            raise ValueError("Proyecto no encontrado")
+            
+        if not new_name or not isinstance(new_name, str) or len(new_name.strip()) < 3:
+            raise ValueError("Nombre de proyecto no válido")
+            
+        # Verificar si el nuevo nombre ya existe
+        if any(p['name'].lower() == new_name.strip().lower() and p['id'] != project_id for p in state['projects']):
+            raise ValueError("Ya existe un proyecto con ese nombre")
+            
+        old_name = project['name']
+        project['name'] = new_name.strip()
+        
+        # Actualizar referencia en tareas
+        for task in state['tasks']:
+            if task['project'] == project_id:
+                task['project'] = project_id
+                
+        st.session_state['force_save'] = True
+        logger.info(f"Proyecto actualizado: {old_name} -> {project['name']}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error al actualizar proyecto: {str(e)}")
+        st.error(f"No se pudo actualizar el proyecto: {str(e)}")
+        return False
 
 def delete_project(state, project_id):
-    # Mover tareas a "Sin proyecto"
-    for task in state['tasks']:
-        if task['project'] == project_id:
-            task['project'] = ""
-    
-    state['projects'] = [project for project in state['projects'] if project['id'] != project_id]
-    save_user_data()
+    """
+    Elimina un proyecto y actualiza tareas relacionadas
+    """
+    try:
+        project = next((p for p in state['projects'] if p['id'] == project_id), None)
+        if not project:
+            return False
+            
+        # Mover tareas a "Sin proyecto"
+        tasks_updated = 0
+        for task in state['tasks']:
+            if task['project'] == project_id:
+                task['project'] = ""
+                tasks_updated += 1
+                
+        # Eliminar proyecto
+        state['projects'] = [p for p in state['projects'] if p['id'] != project_id]
+        
+        st.session_state['force_save'] = True
+        logger.info(f"Proyecto eliminado: {project['name']} (Tareas actualizadas: {tasks_updated})")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error al eliminar proyecto: {str(e)}")
+        st.error("Error al eliminar proyecto")
+        return False
 
 # ==============================================
 # Interfaz de usuario mejorada
@@ -945,40 +1272,85 @@ def sidebar():
             st.rerun()
 
 def main():
-    # Inicialización del estado
+    # Inicialización del estado con verificación de integridad
     if 'pomodoro_state' not in st.session_state:
+        # Cargar estado por defecto
         st.session_state.pomodoro_state = get_default_state()
         
         # Cargar datos del usuario si está autenticado
         if 'user' in st.session_state and st.session_state.user:
-            user_data = load_user_data()
-            if user_data:
-                st.session_state.pomodoro_state.update(user_data)
-            
-            profile = load_user_profile()
-            if profile:
-                st.session_state.pomodoro_state['username'] = profile.get('username', '')
-                st.session_state.pomodoro_state['display_name'] = profile.get('display_name', '')
+            try:
+                user_data = load_user_data()
+                if user_data:
+                    # Combinar con valores por defecto para campos faltantes
+                    for key in st.session_state.pomodoro_state:
+                        if key in user_data:
+                            st.session_state.pomodoro_state[key] = user_data[key]
+                    
+                    # Validar y limpiar el estado cargado
+                    st.session_state.pomodoro_state = validate_state(st.session_state.pomodoro_state)
+                    
+                    # Cargar perfil de usuario
+                    profile = load_user_profile()
+                    if profile:
+                        st.session_state.pomodoro_state['username'] = profile.get('username', '')
+                        st.session_state.pomodoro_state['display_name'] = profile.get('display_name', '')
+                
+                logger.info("Estado inicializado y validado")
+                
+            except Exception as e:
+                logger.error(f"Error al inicializar estado: {str(e)}")
+                st.error("Error al cargar datos. Usando configuración por defecto.")
+                st.session_state.pomodoro_state = get_default_state()
+    
+    # Verificar y mantener la sesión activa
+    if 'user' in st.session_state and st.session_state.user:
+        try:
+            # Verificar si el token sigue siendo válido
+            user = supabase.auth.get_user()
+            if not user:
+                st.session_state.user = None
+                st.session_state.pomodoro_state = None
+                st.rerun()
+        except Exception as e:
+            logger.error(f"Error al verificar sesión: {str(e)}")
+            st.session_state.user = None
+            st.session_state.pomodoro_state = None
+            st.rerun()
     
     # Barra lateral
     sidebar()
     
     # Contenido principal
     if 'user' in st.session_state and st.session_state.user:
-        # Guardado automático
-        auto_save()
-        
-        # Mostrar pestaña seleccionada
-        current_tab = st.session_state.get('current_tab', "🍅 Temporizador")
-        
-        if current_tab == "🍅 Temporizador":
-            timer_tab()
-        elif current_tab == "📋 Tareas":
-            tasks_tab()
-        elif current_tab == "📊 Estadísticas":
-            stats_tab()
-        elif current_tab == "⚙️ Configuración":
-            settings_tab()
+        try:
+            # Guardado automático
+            auto_save()
+            
+            # Mostrar pestaña seleccionada
+            current_tab = st.session_state.get('current_tab', "🍅 Temporizador")
+            
+            if current_tab == "🍅 Temporizador":
+                timer_tab()
+            elif current_tab == "📋 Tareas":
+                tasks_tab()
+            elif current_tab == "📊 Estadísticas":
+                stats_tab()
+            elif current_tab == "⚙️ Configuración":
+                settings_tab()
+            
+            # Verificación periódica de consistencia de datos
+            if 'last_validation' not in st.session_state or \
+               (datetime.datetime.now() - st.session_state.last_validation).seconds > 60:
+                st.session_state.pomodoro_state = validate_state(st.session_state.pomodoro_state)
+                st.session_state.last_validation = datetime.datetime.now()
+                
+        except Exception as e:
+            logger.error(f"Error en la interfaz principal: {str(e)}")
+            st.error("¡Oops! Algo salió mal. Por favor recarga la página.")
+            if st.button("Recargar aplicación"):
+                st.session_state.clear()
+                st.rerun()
     
     else:
         # Pantalla de bienvenida para usuarios no autenticados
@@ -1052,7 +1424,7 @@ def main():
         st.divider()
         st.markdown("""
         <div style="text-align: center; color: #666; font-size: 0.9em;">
-        Pomodoro Pro v2.0 | Desarrollado con Streamlit y Supabase | © 2023
+        Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
         </div>
         """, unsafe_allow_html=True)
 
