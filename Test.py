@@ -479,7 +479,84 @@ def update_achievements(state, minutes):
             else:
                 state['achievements']['streak_days'] = 1
             state['last_session_date'] = today
+def auth_section():
+    """Maneja la autenticación del usuario"""
+    if 'user' not in st.session_state:
+        st.session_state.user = None
+    
+    if not st.session_state.user:
+        tab1, tab2 = st.tabs(["Iniciar Sesión", "Registrarse"])
+        
+        with tab1:
+            with st.form("login_form"):
+                email = st.text_input("Correo electrónico")
+                password = st.text_input("Contraseña", type="password")
+                
+                if st.form_submit_button("Ingresar"):
+                    if not email or not password:
+                        st.error("Por favor completa todos los campos")
+                    else:
+                        try:
+                            user = supabase.auth.sign_in_with_password({
+                                "email": email,
+                                "password": password
+                            })
+                            st.session_state.user = user
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al iniciar sesión: {str(e)}")
+        
+        with tab2:
+            with st.form("signup_form"):
+                new_email = st.text_input("Correo electrónico (registro)")
+                new_password = st.text_input("Contraseña (registro)", type="password")
+                confirm_password = st.text_input("Confirmar contraseña", type="password")
+                username = st.text_input("Nombre de usuario")
+                display_name = st.text_input("Nombre para mostrar (opcional)")
+                
+                if st.form_submit_button("Crear cuenta"):
+                    if not new_email or not new_password or not confirm_password or not username:
+                        st.error("Por favor completa todos los campos obligatorios")
+                    elif new_password != confirm_password:
+                        st.error("Las contraseñas no coinciden")
+                    else:
+                        try:
+                            user = supabase.auth.sign_up({
+                                "email": new_email,
+                                "password": new_password
+                            })
+                            
+                            if user:
+                                user_id = user.user.id
+                                supabase.table('user_profiles').insert({
+                                    'user_id': user_id,
+                                    'email': new_email,
+                                    'username': username,
+                                    'display_name': display_name or username,
+                                    'created_at': datetime.datetime.now().isoformat()
+                                }).execute()
+                            
+                            st.success("¡Cuenta creada! Por favor inicia sesión.")
+                        except Exception as e:
+                            st.error(f"Error al registrar: {str(e)}")
+    else:
+        if st.sidebar.button("Cerrar sesión"):
+            supabase.auth.sign_out()
+            st.session_state.user = None
+            st.session_state.pomodoro_state = None
+            st.rerun()
 
+def check_session():
+    """Verifica si la sesión del usuario sigue siendo válida"""
+    if 'user' in st.session_state and st.session_state.user:
+        try:
+            user = supabase.auth.get_user()
+            if not user:
+                st.session_state.user = None
+                st.rerun()
+        except:
+            st.session_state.user = None
+            st.rerun() 
 # ==============================================
 # Función principal mejorada
 # ==============================================
