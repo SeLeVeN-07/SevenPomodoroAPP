@@ -667,6 +667,10 @@ def update_timer(state):
     try:
         if state['timer_running'] and not state['timer_paused']:
             current_time = time.monotonic()
+            # Asegurarse de que last_update existe
+            if state['last_update'] is None:
+                state['last_update'] = current_time
+                
             elapsed = current_time - state['last_update']
             state['last_update'] = current_time
 
@@ -676,10 +680,10 @@ def update_timer(state):
             if state['remaining_time'] <= 0:
                 handle_phase_completion(state)
     except Exception as e:
-        logger.error(f"Error en update_timer: {str(e)}")
+        logger.error(f"Error en update_timer: {str(e)}", exc_info=True)
         st.error("Error en el temporizador. Reiniciando...")
         reset_timer(state)
-
+        
 def reset_timer(state):
     state['timer_running'] = False
     state['timer_paused'] = False
@@ -706,12 +710,17 @@ def handle_phase_completion(state):
     state['current_phase'] = determine_next_phase(was_work)
     state['remaining_time'] = get_phase_duration(state['current_phase'])
     state['total_active_time'] = 0
+    state['timer_running'] = False
+    state['timer_paused'] = False
+    state['last_update'] = None
     
     if was_work:
         st.toast("¡Pomodoro completado! Tómate un descanso.", icon="🎉")
     else:
         st.toast("¡Descanso completado! Volvamos al trabajo.", icon="💪")
     
+    # Guardar el estado después de completar una fase
+    save_user_data()
     st.rerun()
 
 def log_session():
@@ -1062,68 +1071,108 @@ def remove_activity(activity_name):
 def timer_tab():
     state = st.session_state.pomodoro_state
     
-    with st.form(key='timer_form'):
-        # Selector de actividad
+    # Mostrar alertas si existen
+    if 'alerts' in st.session_state and st.session_state.alerts:
+        for alert in st.session_state.alerts:
+            st.warning(alert)
+        # Limpiar alertas después de mostrarlas
+        st.session_state.alerts = []
+    
+    # Mostrar materia actual si está en modo estudio
+    if state['study_mode'] and state['current_activity']:
+        st.header(f"📚 {state['current_activity']}")
+
+    # Selector de actividad
+    col1, col2 = st.columns(2)
+    with col1:
         if not state['activities']:
-            state['activities'] = ["Trabajo"]
-            
-        state['current_activity'] = st.selectbox(
-            "Actividad",
-            state['activities'],
-            index=state['activities'].index(state['current_activity']) 
-            if state['current_activity'] in state['activities'] else 0
-        )
-
-        # Visualización del temporizador
-        theme = THEMES[state['current_theme']]
-        phase_duration = get_phase_duration(state['current_phase'])
-        progress = 1 - (state['remaining_time'] / phase_duration) if phase_duration > 0 else 0
-
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=state['remaining_time'],
-            number={'suffix': "s", 'font': {'size': 40}},
-            gauge={
-                'axis': {'range': [0, phase_duration], 'visible': False},
-                'bar': {'color': get_phase_color(state['current_phase'])},
-                'steps': [{'range': [0, phase_duration], 'color': theme['circle_bg']}]
-            },
-            domain={'x': [0, 1], 'y': [0, 1]},
-            title={'text': f"{state['current_phase']} - {format_time(state['remaining_time'])}", 'font': {'size': 24}}
-        ))
-
-        fig.update_layout(
-            height=300,
-            margin=dict(l=10, r=10, t=80, b=10),
-            paper_bgcolor=theme['bg'],
-            font={'color': theme['text']}
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Controles del temporizador
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            start_pause = st.form_submit_button(
-                "▶️ Iniciar" if not state['timer_running'] else "⏸️ Pausar",
-                use_container_width=True,
-                type="primary"
+            st.warning("No hay actividades disponibles. Agrega actividades en la pestaña de Configuración")
+            state['current_activity'] = ""
+        else:
+            state['current_activity'] = st.selectbox(
+                "Actividad",
+                state['activities'],
+                key="current_activity"
             )
 
-        with col2:
-            if state['timer_running']:
-                pause_resume = st.form_submit_button(
-                    "⏸️ Pausar" if not state['timer_paused'] else "▶️ Reanudar",
-                    use_container_width=True
-                )
-            else:
-                st.form_submit_button("⏸️ Pausar", disabled=True, use_container_width=True)
+    # Selector de proyecto (solo proyectos asociados a la actividad actual)
+    with col2:
+        available_projects = [p['name'] for p in state['projects'] if p['activity'] == state['current_activity']]
+        if available_projects:
+            state['current_project'] = st.selectbox(
+                "Proyecto",
+                available_projects + ["Ninguno"],
+                key="current_project"
+            )
+        else:
+            st.info("No hay proyectos para esta actividad")
+            state['current_project'] = "Ninguno"
 
-        with col3:
-            skip = st.form_submit_button("⏭️ Saltar Fase", use_container_width=True)
+    # Crear proyecto rápido si es necesario
+    if state['current_activity'] and state['current_project'] == "Ninguno":
+        if st.button("➕ Crear Proyecto Rápido", key="create_project_quick"):
+            # Generar nombre predeterminado
+            default_name = f"{state['current_activity']} - Proyecto"
+            new_project = {
+                'name': default_name,
+                'activity': state['current_activity']
+            }
+            state['projects'].append(new_project)
+            state['current_project'] = default_name
+            st.success("Proyecto creado!")
+            st.rerun()
 
-        st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
+    # Visualización del temporizador
+    theme = THEMES[state['current_theme']]
+    phase_duration = get_phase_duration(state['current_phase'])
+    progress = 1 - (state['remaining_time'] / phase_duration) if phase_duration > 0 else 0
+
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=state['remaining_time'],
+        number={'suffix': "s", 'font': {'size': 40}},
+        gauge={
+            'axis': {'range': [0, phase_duration], 'visible': False},
+            'bar': {'color': get_phase_color(state['current_phase'])},
+            'steps': [{'range': [0, phase_duration], 'color': theme['circle_bg']}]
+        },
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': f"{state['current_phase']} - {format_time(state['remaining_time'])}", 'font': {'size': 24}}
+    ))
+
+    fig.update_layout(
+        height=300,
+        margin=dict(l=10, r=10, t=80, b=10),
+        paper_bgcolor=theme['bg'],
+        font={'color': theme['text']}
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Controles del temporizador
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        start_pause = st.button(
+            "▶️ Iniciar" if not state['timer_running'] else "⏸️ Pausar",
+            use_container_width=True,
+            type="primary" if not state['timer_running'] else "secondary",
+            key="start_pause_btn"
+        )
+
+    with col2:
+        pause_resume = st.button(
+            "⏸️ Pausar" if state['timer_running'] and not state['timer_paused'] else "▶️ Reanudar",
+            use_container_width=True,
+            disabled=not state['timer_running'],
+            key="pause_resume_btn"
+        )
+
+    with col3:
+        skip = st.button("⏭️ Saltar Fase", use_container_width=True, key="skip_btn")
+
+    # Contador de sesiones
+    st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
 
     # Manejo de eventos
     if start_pause:
@@ -1134,19 +1183,25 @@ def timer_tab():
             state['total_active_time'] = 0
             state['timer_start'] = time.monotonic()
             state['last_update'] = time.monotonic()
+            st.toast("Temporizador iniciado! 🍅", icon="▶️")
         else:
             state['timer_running'] = False
+            st.toast("Temporizador detenido ⏹️", icon="⏹️")
+        save_user_data()  # Guardar inmediatamente
         st.rerun()
     
-    elif 'pause_resume' in locals() and pause_resume:
+    elif pause_resume:
         if state['timer_running'] and not state['timer_paused']:
             state['timer_paused'] = True
             state['paused_time'] = time.monotonic()
+            st.toast("Temporizador pausado ⏸️", icon="⏸️")
         elif state['timer_paused']:
             state['timer_paused'] = False
             pause_duration = time.monotonic() - state['paused_time']
             state['timer_start'] += pause_duration
             state['last_update'] = time.monotonic()
+            st.toast("Temporizador reanudado ▶️", icon="▶️")
+        save_user_data()  # Guardar inmediatamente
         st.rerun()
     
     elif skip:
@@ -1158,7 +1213,7 @@ def timer_tab():
                 log_session()
             
             if state['session_count'] >= state['total_sessions']:
-                st.success("¡Todas las sesiones completadas!")
+                st.success("¡Todas las sesiones completadas! 🎉")
                 state['session_count'] = 0
         
         state['current_phase'] = determine_next_phase(was_work)
@@ -1166,6 +1221,13 @@ def timer_tab():
         state['total_active_time'] = 0
         state['timer_running'] = False
         state['timer_paused'] = False
+        
+        if was_work:
+            st.toast("¡Pomodoro completado! Tómate un descanso. ☕", icon="🎉")
+        else:
+            st.toast("¡Descanso completado! Volvamos al trabajo. 💪", icon="⏰")
+        
+        save_user_data()  # Guardar inmediatamente
         st.rerun()
 
     # Actualización del temporizador
@@ -1601,6 +1663,9 @@ def main():
         # Cargar estado por defecto
         st.session_state.pomodoro_state = get_default_state()
         
+        # Inicializar alertas
+        st.session_state.alerts = []
+        
         # Cargar datos del usuario si está autenticado
         if 'user' in st.session_state and st.session_state.user:
             try:
@@ -1611,16 +1676,8 @@ def main():
                 if user_data:
                     logger.info("Datos principales encontrados, validando...")
                     
-                    # Combinar con valores por defecto para campos faltantes
-                    for key in st.session_state.pomodoro_state:
-                        if key in user_data:
-                            try:
-                                st.session_state.pomodoro_state[key] = user_data[key]
-                            except Exception as e:
-                                logger.warning(f"Error al cargar {key}: {str(e)}")
-                    
-                    # Validar y limpiar el estado cargado
-                    st.session_state.pomodoro_state = validate_state(st.session_state.pomodoro_state)
+                    # Reemplazar completamente el estado con los datos cargados
+                    st.session_state.pomodoro_state = validate_state(user_data)
                     
                     # 2. Cargar perfil de usuario
                     profile = load_user_profile()
@@ -1628,6 +1685,9 @@ def main():
                         st.session_state.pomodoro_state['username'] = profile.get('username', '')
                         st.session_state.pomodoro_state['display_name'] = profile.get('display_name', '')
                         logger.info("Perfil de usuario cargado correctamente")
+                    
+                    # 3. Verificar y mostrar alertas de tareas próximas a vencer
+                    check_task_deadlines()
                 
                 logger.info("Estado inicializado y validado")
                 
