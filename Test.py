@@ -1476,7 +1476,7 @@ def settings_tab():
             st.rerun()
 
     with col2:
-    st.subheader("👤 Perfil de Usuario")
+        st.subheader("👤 Perfil de Usuario")
     
     # Cargar perfil de usuario
     user_profile = load_user_profile()
