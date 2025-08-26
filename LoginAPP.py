@@ -20,36 +20,6 @@ import gzip
 from collections import defaultdict
 from supabase import create_client, Client
 
-# En tu función principal o al inicio del script
-st.markdown("""
-    <script>
-        // Evitar el scroll automático
-        window.addEventListener('load', function() {
-            setTimeout(function() {
-                window.scrollTo(0, 0);
-            }, 100);
-        });
-        
-        // Mantener posición al actualizar
-        let lastScroll = 0;
-        document.addEventListener('scroll', function() {
-            lastScroll = window.scrollY;
-        });
-        
-        window.addEventListener('beforeunload', function() {
-            sessionStorage.setItem('scrollPos', lastScroll);
-        });
-        
-        window.addEventListener('load', function() {
-            const savedScroll = sessionStorage.getItem('scrollPos');
-            if (savedScroll) {
-                window.scrollTo(0, savedScroll);
-                sessionStorage.removeItem('scrollPos');
-            }
-        });
-    </script>
-""", unsafe_allow_html=True)
-
 # Configuración de la página
 st.set_page_config(
     page_title="Pomodoro Pro",
@@ -203,26 +173,13 @@ def save_user_data():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
             user_id = st.session_state.user.user.id
-            data = st.session_state.pomodoro_state.copy()  # Hacer una copia para no modificar el original
-            
-            # Función recursiva para convertir datetime a string
-            def convert_datetime(obj):
-                if isinstance(obj, (datetime.datetime, datetime.date)):
-                    return obj.isoformat()
-                elif isinstance(obj, list):
-                    return [convert_datetime(item) for item in obj]
-                elif isinstance(obj, dict):
-                    return {key: convert_datetime(value) for key, value in obj.items()}
-                return obj
-            
-            # Convertir todos los datetime en los datos
-            serialized_data = convert_datetime(data)
+            data = st.session_state.pomodoro_state
             
             # Usamos upsert para crear o actualizar el registro
             response = supabase.table('user_data').upsert({
                 'user_id': user_id,
                 'email': st.session_state.user.user.email,
-                'pomodoro_data': serialized_data,
+                'pomodoro_data': data,
                 'last_updated': datetime.datetime.now().isoformat()
             }).execute()
             
@@ -242,25 +199,7 @@ def load_user_data():
             response = supabase.table('user_data').select('*').eq('user_id', user_id).execute()
             
             if response.data:
-                data = response.data[0]['pomodoro_data']
-                
-                # Función para convertir strings ISO a datetime
-                def parse_datetime(obj):
-                    if isinstance(obj, str):
-                        try:
-                            return datetime.datetime.fromisoformat(obj)
-                        except ValueError:
-                            try:
-                                return datetime.date.fromisoformat(obj)
-                            except ValueError:
-                                return obj
-                    elif isinstance(obj, list):
-                        return [parse_datetime(item) for item in obj]
-                    elif isinstance(obj, dict):
-                        return {key: parse_datetime(value) for key, value in obj.items()}
-                    return obj
-                
-                return parse_datetime(data)
+                return response.data[0]['pomodoro_data']
         except Exception as e:
             st.error(f"Error al cargar datos: {str(e)}")
     return None
@@ -321,13 +260,14 @@ def log_session():
     if state['total_active_time'] >= 0.1:
         minutes = round(state['total_active_time'] / 60, 2)
         log_entry = {
-            'Fecha': datetime.datetime.now().date().isoformat(),  # Convertir a string
-            'Hora Inicio': (state['start_time'] or datetime.datetime.now()).strftime("%H:%M:%S"),
+            'Fecha': datetime.datetime.now().strftime("%Y-%m-%d"),
+            'Hora Inicio': state['start_time'].strftime("%H:%M:%S") if state['start_time'] else datetime.datetime.now().strftime("%H:%M:%S"),
             'Tiempo Activo (min)': minutes,
             'Actividad': state['current_activity'],
             'Proyecto': state['current_project'],
             'Tarea': state.get('current_task', '')
         }
+        
         # Guardar en el historial de sesiones
         state['session_history'].append(log_entry)
         
@@ -1397,16 +1337,15 @@ def sidebar():
 # ==============================================
 
 def main():
-    # Inicialización del estado con carga desde Supabase
+    # Inicialización del estado de la sesión
     if 'pomodoro_state' not in st.session_state:
+        # Cargar datos del usuario si está autenticado
         if 'user' in st.session_state and st.session_state.user:
-            # Cargar datos existentes
-            loaded_data = load_user_data()
-            st.session_state.pomodoro_state = loaded_data if loaded_data else get_default_state()
-            
-            # Forzar guardado inicial si no existían datos
-            if not loaded_data:
-                save_user_data()
+            user_data = load_user_data()
+            if user_data:
+                st.session_state.pomodoro_state = user_data
+            else:
+                st.session_state.pomodoro_state = get_default_state()
         else:
             st.session_state.pomodoro_state = get_default_state()
     
