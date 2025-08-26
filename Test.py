@@ -651,6 +651,132 @@ def main():
         
         if current_tab == "🍅 Temporizador":
             timer_tab()
+        elif current_tab == "📋 Tareas":
+            task_management_tab()
+        elif current_tab == "📊 Estadísticas":
+            stats_tab()
+        elif current_tab == "👤 Perfil":
+            st.title("👤 Mi Perfil")
+            
+            # Mostrar información actual
+            state = st.session_state.pomodoro_state
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Información Actual")
+                st.markdown(f"""
+                - **Nombre de usuario:** @{state.get('username', 'No establecido')}
+                - **Nombre para mostrar:** {state.get('display_name', 'No establecido')}
+                - **Email:** {st.session_state.user.user.email}
+                - **Miembro desde:** {st.session_state.user.user.created_at[:10]}
+                """)
+                
+                # Estadísticas rápidas
+                st.divider()
+                st.subheader("Mis Logros")
+                st.markdown(f"""
+                - 🍅 Pomodoros completados: {state['achievements']['pomodoros_completed']}
+                - ✅ Tareas completadas: {state['achievements']['tasks_completed']}
+                - 🔥 Racha actual: {state['achievements']['streak_days']} días
+                - ⏱️ Horas totales: {state['achievements']['total_hours']:.1f}
+                """)
+            
+            with col2:
+                st.subheader("Editar Perfil")
+                with st.form("profile_form"):
+                    new_username = st.text_input(
+                        "Nuevo nombre de usuario",
+                        value=state.get('username', ''),
+                        help="3-20 caracteres (letras, números, guiones)"
+                    )
+                    
+                    new_display_name = st.text_input(
+                        "Nuevo nombre para mostrar",
+                        value=state.get('display_name', '')
+                    )
+                    
+                    if st.form_submit_button("💾 Guardar Cambios"):
+                        if not validate_username(new_username):
+                            st.error("Nombre de usuario no válido")
+                        else:
+                            try:
+                                # Actualizar en Supabase
+                                supabase.table('user_profiles').upsert({
+                                    'user_id': st.session_state.user.user.id,
+                                    'username': new_username,
+                                    'display_name': new_display_name,
+                                    'updated_at': datetime.datetime.now().isoformat()
+                                }).execute()
+                                
+                                # Actualizar estado local
+                                state['username'] = new_username
+                                state['display_name'] = new_display_name
+                                save_user_data()
+                                
+                                st.success("¡Perfil actualizado!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error al actualizar: {str(e)}")
+            
+            # Sección de seguridad
+            st.divider()
+            st.subheader("🔒 Seguridad")
+            with st.expander("Cambiar contraseña"):
+                with st.form("password_form"):
+                    current_password = st.text_input("Contraseña actual", type="password")
+                    new_password = st.text_input("Nueva contraseña", type="password")
+                    confirm_password = st.text_input("Confirmar nueva contraseña", type="password")
+                    
+                    if st.form_submit_button("Cambiar Contraseña"):
+                        if not current_password or not new_password:
+                            st.error("Todos los campos son obligatorios")
+                        elif new_password != confirm_password:
+                            st.error("Las contraseñas no coinciden")
+                        else:
+                            try:
+                                # Actualizar contraseña en Supabase
+                                supabase.auth.update_user({
+                                    "password": new_password
+                                })
+                                st.success("¡Contraseña actualizada correctamente!")
+                            except Exception as e:
+                                st.error(f"Error al cambiar contraseña: {str(e)}")
+            
+        elif current_tab == "⚙️ Configuración":
+            settings_tab()
+    
+    else:
+        # Pantalla de bienvenida para usuarios no autenticados
+        st.title("🍅 Pomodoro Pro")
+        st.markdown("""
+        ### ¡Bienvenido a Pomodoro Pro!
+        
+        Para comenzar:
+        1. Crea una cuenta o inicia sesión en la barra lateral
+        2. Personaliza tu perfil con nombre de usuario
+        3. Configura tus tiempos de trabajo
+        4. Comienza a mejorar tu productividad
+        
+        **Características principales:**
+        - 🕒 Temporizador Pomodoro personalizable
+        - 📋 Gestión avanzada de tareas
+        - 📊 Estadísticas detalladas
+        - 👤 Perfil personalizado
+        - ☁️ Almacenamiento en la nube
+        """)
+    # Barra lateral
+    sidebar()
+    
+    # Contenido principal
+    if 'user' in st.session_state and st.session_state.user:
+        # Guardado automático
+        auto_save()
+        
+        # Mostrar pestaña seleccionada
+        current_tab = st.session_state.get('current_tab', "🍅 Temporizador")
+        
+        if current_tab == "🍅 Temporizador":
+            timer_tab()
         elif current_tab == "📊 Estadísticas":
             stats_tab()
         elif current_tab == "⚙️ Configuración":
