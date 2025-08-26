@@ -507,6 +507,32 @@ def main():
     setup_event_handlers()
     
     # Barra lateral
+    def sidebar():
+    # Sección de autenticación
+    auth_section()
+    
+    if 'user' in st.session_state and st.session_state.user:
+        state = st.session_state.pomodoro_state
+        check_session()
+
+        # Mostrar info de usuario
+        display_name = state.get('display_name', '')
+        email = st.session_state.user.user.email
+        st.sidebar.title(f"🍅 Pomodoro Pro")
+        st.sidebar.write(f"Bienvenido, {display_name or email}")
+
+        # Navegación
+        st.sidebar.radio(
+            "Navegación",
+            ["🍅 Temporizador", "📋 Tareas", "📊 Estadísticas", "⚙️ Configuración"],
+            key='sidebar_nav'
+        )
+
+        if st.sidebar.button("Cerrar sesión"):
+            supabase.auth.sign_out()
+            st.session_state.clear()
+            st.rerun()
+            
     sidebar()
     
     # Solo mostrar la aplicación si el usuario está autenticado
