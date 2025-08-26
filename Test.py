@@ -306,62 +306,64 @@ def auth_section():
                             st.error(f"Error al iniciar sesión: {str(e)}")
         
         with tab2:
-    with st.form("signup_form", clear_on_submit=True):
-        new_email = st.text_input("Correo electrónico (registro)")
-        new_password = st.text_input("Contraseña (registro)", type="password")
-        confirm_password = st.text_input("Confirmar contraseña", type="password")
-        username = st.text_input("Nombre de usuario")
-        display_name = st.text_input("Nombre para mostrar (opcional)")
-        
-        submitted = st.form_submit_button("Crear cuenta")
-        if submitted:
-            if not all([new_email, new_password, confirm_password, username]):
-                st.error("Por favor completa todos los campos obligatorios")
-            elif not validate_email(new_email):
-                st.error("Por favor ingresa un email válido")
-            elif not validate_username(username):
-                st.error("Nombre de usuario inválido (3-20 caracteres, solo letras, números, guiones y guiones bajos)")
-            elif new_password != confirm_password:
-                st.error("Las contraseñas no coinciden")
-            else:
-                try:
-                    # 1. Registrar el usuario en Auth
-                    auth_response = supabase.auth.sign_up({
-                        "email": new_email,
-                        "password": new_password
-                    })
-                    
-                    if auth_response.user:
-                        # 2. Iniciar sesión para obtener el token
-                        sign_in_response = supabase.auth.sign_in_with_password({
-                            "email": new_email,
-                            "password": new_password
-                        })
-                        
-                        # 3. Establecer el usuario en la sesión
-                        st.session_state.user = sign_in_response
-                        
-                        # 4. Crear el perfil usando el cliente autenticado
-                        user_id = str(auth_response.user.id)
-                        response = supabase.table("user_profiles").insert({
-                            "user_id": user_id,
-                            "email": new_email,
-                            "username": username,
-                            "display_name": display_name or username,
-                            "created_at": datetime.datetime.now().isoformat()
-                        }).execute()
-                        
-                        st.success("¡Cuenta creada correctamente! Ya puedes iniciar sesión.")
-                        st.rerun()
+            with st.form("signup_form", clear_on_submit=True):
+                new_email = st.text_input("Correo electrónico (registro)")
+                new_password = st.text_input("Contraseña (registro)", type="password")
+                confirm_password = st.text_input("Confirmar contraseña", type="password")
+                username = st.text_input("Nombre de usuario")
+                display_name = st.text_input("Nombre para mostrar (opcional)")
+                
+                submitted = st.form_submit_button("Crear cuenta")
+                if submitted:
+                    if not all([new_email, new_password, confirm_password, username]):
+                        st.error("Por favor completa todos los campos obligatorios")
+                    elif not validate_email(new_email):
+                        st.error("Por favor ingresa un email válido")
+                    elif not validate_username(username):
+                        st.error("Nombre de usuario inválido (3-20 caracteres, solo letras, números, guiones y guiones bajos)")
+                    elif new_password != confirm_password:
+                        st.error("Las contraseñas no coinciden")
                     else:
-                        st.error("Error al crear el usuario de autenticación")
-                        
-                except Exception as e:
-                    error_msg = str(e)
-                    if "already registered" in error_msg.lower():
-                        st.error("Este correo electrónico ya está registrado")
-                    else:
-                        st.error(f"Error al registrar: {error_msg}")
+                        try:
+                            # 1. Registrar el usuario en Auth
+                            auth_response = supabase.auth.sign_up({
+                                "email": new_email,
+                                "password": new_password
+                            })
+                            
+                            if auth_response.user:
+                                # 2. Iniciar sesión para obtener el token de autenticación
+                                sign_in_response = supabase.auth.sign_in_with_password({
+                                    "email": new_email,
+                                    "password": new_password
+                                })
+                                
+                                # 3. Guardar el usuario en la sesión
+                                st.session_state.user = sign_in_response
+                                
+                                # 4. Ahora insertar el perfil (con el usuario autenticado)
+                                user_id = str(auth_response.user.id)
+                                supabase.table("user_profiles").insert({
+                                    "user_id": user_id,
+                                    "email": new_email,
+                                    "username": username,
+                                    "display_name": display_name or username,
+                                    "created_at": datetime.datetime.now().isoformat()
+                                }).execute()
+                                
+                                st.success("¡Cuenta creada exitosamente! Bienvenido/a.")
+                                st.rerun()
+                            else:
+                                st.error("Error al crear el usuario de autenticación")
+                                
+                        except Exception as e:
+                            error_msg = str(e)
+                            if "already registered" in error_msg.lower():
+                                st.error("Este correo electrónico ya está registrado")
+                            elif "row-level security" in error_msg.lower():
+                                st.error("Error de configuración de seguridad. Por favor contacta al administrador.")
+                            else:
+                                st.error(f"Error al registrar: {error_msg}")
 
 # ==============================================
 # Funciones de persistencia mejoradas
