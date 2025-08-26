@@ -56,15 +56,19 @@ def init_supabase():
 # Inicializar Supabase
 supabase = init_supabase()
 
-# Prueba de conexión (después de inicializar supabase)
-if supabase is not None:
+# Verificar conexión a Supabase
+if supabase is None:
+    st.error("❌ No se pudo inicializar Supabase. La aplicación funcionará en modo local.")
+    st.session_state.supabase_connected = False
+else:
     try:
         test_response = supabase.table('user_profiles').select('*').limit(1).execute()
+        st.session_state.supabase_connected = True
         st.success("✅ Conexión a Supabase exitosa")
     except Exception as e:
         st.error(f"❌ Error de conexión: {str(e)}")
-else:
-    st.error("❌ No se pudo inicializar Supabase")
+        st.session_state.supabase_connected = False
+
 # Constantes y configuración
 THEMES = {
     'Claro': {
@@ -372,8 +376,8 @@ def auth_section():
                                     "user_id": user_id,
                                     "email": new_email,
                                     "username": username,
-                                    "display_name": display_name or username,
-                                    "created_at": datetime.datetime.now().isoformat()
+                                    'display_name': display_name or username,
+                                    'created_at': datetime.datetime.now().isoformat()
                                 }).execute()
                                 
                                 st.success("¡Cuenta creada exitosamente! Bienvenido/a.")
@@ -608,6 +612,7 @@ def update_user_profile(username, display_name):
     else:
         st.error("No hay usuario autenticado")
         return False
+
 def auto_save():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
@@ -663,26 +668,25 @@ def determine_next_phase(was_work):
         return "Descanso Largo"
     return "Descanso Corto"
 
-def update_timer(state):
-    try:
-        if state['timer_running'] and not state['timer_paused']:
-            current_time = time.monotonic()
-            # Asegurarse de que last_update existe
-            if state['last_update'] is None:
-                state['last_update'] = current_time
-                
-            elapsed = current_time - state['last_update']
+def update_timer():
+    """Actualiza el temporizador si está en ejecución"""
+    state = st.session_state.pomodoro_state
+    
+    if state['timer_running'] and not state['timer_paused']:
+        current_time = time.monotonic()
+        
+        # Inicializar last_update si es None
+        if state['last_update'] is None:
             state['last_update'] = current_time
+            
+        elapsed = current_time - state['last_update']
+        state['last_update'] = current_time
 
-            state['remaining_time'] -= elapsed
-            state['total_active_time'] += elapsed
+        state['remaining_time'] -= elapsed
+        state['total_active_time'] += elapsed
 
-            if state['remaining_time'] <= 0:
-                handle_phase_completion(state)
-    except Exception as e:
-        logger.error(f"Error en update_timer: {str(e)}", exc_info=True)
-        st.error("Error en el temporizador. Reiniciando...")
-        reset_timer(state)
+        if state['remaining_time'] <= 0:
+            handle_phase_completion(state)
         
 def reset_timer(state):
     state['timer_running'] = False
@@ -760,6 +764,33 @@ def update_achievements(state, minutes):
 # ==============================================
 # Funciones de gestión de tareas
 # ==============================================
+
+def check_task_deadlines():
+    """Verifica las fechas de vencimiento de las tareas y genera alertas"""
+    if 'alerts' not in st.session_state:
+        st.session_state.alerts = []
+    
+    state = st.session_state.pomodoro_state
+    today = date.today()
+    
+    for task in state.get('tasks', []):
+        if not task.get('completed', False) and task.get('due_date'):
+            # Asegurarse de que due_date es un objeto date
+            due_date = task['due_date']
+            if isinstance(due_date, str):
+                try:
+                    due_date = datetime.datetime.strptime(due_date, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+            
+            days_until_due = (due_date - today).days
+            
+            if days_until_due == 0:
+                st.session_state.alerts.append(f"⏰ La tarea '{task['name']}' vence hoy!")
+            elif days_until_due < 0:
+                st.session_state.alerts.append(f"⚠️ La tarea '{task['name']}' está vencida!")
+            elif days_until_due <= 3:
+                st.session_state.alerts.append(f"🔔 La tarea '{task['name']}' vence en {days_until_due} días")
 
 def generate_task_id(state):
     """Genera un ID único para tareas usando UUID"""
@@ -960,8 +991,6 @@ def delete_task(state, task_id):
         logger.error(f"Error al eliminar tarea: {str(e)}")
         return False
 
-
-
 def update_project(state, project_id, new_name):
     """
     Actualiza un proyecto existente
@@ -1022,7 +1051,6 @@ def delete_project(state, project_id):
         logger.error(f"Error al eliminar proyecto: {str(e)}")
         st.error("Error al eliminar proyecto")
         return False
-
 
 def remove_activity(activity_name):
     try:
@@ -1231,7 +1259,11 @@ def timer_tab():
         st.rerun()
 
     # Actualización del temporizador
-    update_timer(state)
+    if state['timer_running']:
+        update_timer()
+        # Forzar rerun para actualizar la visualización
+        time.sleep(0.1)
+        st.rerun()
 
 def tasks_tab():
     state = st.session_state.pomodoro_state
@@ -1463,6 +1495,7 @@ def tasks_tab():
                             delete_task(state, task['id'])
                             st.success("Tarea eliminada!")
                             st.rerun()
+
 def stats_tab():
     state = st.session_state.pomodoro_state
     
