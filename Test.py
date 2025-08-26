@@ -373,8 +373,9 @@ def save_user_data():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
             state = st.session_state.pomodoro_state.copy()
+            logger.info(f"Intentando guardar datos. Actividad actual: {state.get('current_activity', 'Ninguna')}")
             
-            # Convertir objetos datetime a strings ISO
+            # Función para serializar objetos datetime
             def convert_datetime(obj):
                 if isinstance(obj, (datetime.datetime, datetime.date)):
                     return obj.isoformat()
@@ -384,43 +385,80 @@ def save_user_data():
                     return {k: convert_datetime(v) for k, v in obj.items()}
                 return obj
             
+            # Serializar el estado completo
             serialized_data = convert_datetime(state)
+            logger.debug(f"Datos serializados: {serialized_data}")
             
-            # Intentar guardar hasta 3 veces con reintentos
+            # Manejo seguro del user_id
+            user_id = st.session_state.user.user.id
+            if not isinstance(user_id, uuid.UUID):
+                try:
+                    user_id = uuid.UUID(str(user_id))
+                    logger.debug(f"User_id convertido a UUID: {user_id}")
+                except (ValueError, AttributeError) as e:
+                    logger.error(f"Formato de user_id inválido: {user_id}. Error: {str(e)}")
+                    return False
+            
+            # Intento de guardado con reintentos
             max_retries = 3
             for attempt in range(max_retries):
                 try:
+                    logger.info(f"Intento de guardado {attempt + 1}/{max_retries}")
+                    
                     response = supabase.table('user_data').upsert({
-                        'user_id': st.session_state.user.user.id,
+                        'user_id': str(user_id),
                         'email': st.session_state.user.user.email,
                         'pomodoro_data': serialized_data,
                         'last_updated': datetime.datetime.now().isoformat()
                     }).execute()
                     
+                    logger.info(f"Datos guardados exitosamente. Respuesta: {response}")
                     st.session_state.last_saved = datetime.datetime.now()
-                    logger.info("Datos guardados exitosamente")
-                    return True
+                    
+                    # Verificar que los datos se guardaron correctamente
+                    if response.data and len(response.data) > 0:
+                        logger.debug("Respuesta contiene datos confirmando el guardado")
+                        return True
+                    else:
+                        logger.warning("La respuesta no contiene datos de confirmación")
+                        continue
+                        
                 except Exception as e:
-                    logger.warning(f"Intento {attempt + 1} fallido al guardar: {str(e)}")
+                    logger.error(f"Intento {attempt + 1} fallido. Error: {str(e)}", exc_info=True)
                     if attempt == max_retries - 1:
-                        logger.error(f"Error al guardar después de {max_retries} intentos: {str(e)}")
+                        logger.error("Fallo después de todos los reintentos")
                         st.error("Error al guardar datos. Intente nuevamente.")
                         return False
-                    time.sleep(1)  # Esperar 1 segundo antes de reintentar
+                    time.sleep(1)  # Espera progresiva entre reintentos
+            
+            return True
+            
         except Exception as e:
-            logger.error(f"Error inesperado al guardar: {str(e)}")
+            logger.error(f"Error inesperado en save_user_data: {str(e)}", exc_info=True)
+            st.error("Error crítico al guardar datos. Consulte los logs.")
             return False
-    return False
+    else:
+        logger.warning("Intento de guardado sin usuario autenticado o estado pomodoro")
+        return False
 
 def load_user_data():
     if 'user' in st.session_state and st.session_state.user:
         try:
+            # Asegurarse de que el user_id sea un UUID válido
+            user_id = st.session_state.user.user.id
+            if not isinstance(user_id, uuid.UUID):
+                try:
+                    user_id = uuid.UUID(user_id)
+                except (ValueError, AttributeError):
+                    logger.error("ID de usuario no válido")
+                    return None
+            
             # Intentar hasta 3 veces con reintentos
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     response = supabase.table('user_data').select('*').eq(
-                        'user_id', st.session_state.user.user.id
+                        'user_id', str(user_id)  # Convertir UUID a string para la consulta
                     ).execute()
                     
                     if response.data:
@@ -458,6 +496,30 @@ def load_user_data():
     
     return None
 
+def load_user_data():
+    if 'user' in st.session_state and st.session_state.user:
+        try:
+            logger.info(f"Cargando datos para user_id: {st.session_state.user.user.id}")
+            
+            response = supabase.table('user_data').select('*').eq(
+                'user_id', st.session_state.user.user.id
+            ).execute()
+            
+            logger.info(f"Respuesta de BD: {response.data}")
+            
+            if response.data:
+                data = response.data[0]['pomodoro_data']
+                logger.info(f"Datos cargados: {data.get('current_activity')}")
+                return parse_datetime(data)
+            
+            logger.warning("No se encontraron datos para este usuario")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error al cargar datos: {str(e)}", exc_info=True)
+            return None
+    return None
+    
 def load_user_profile():
     if 'user' in st.session_state and st.session_state.user:
         try:
@@ -475,18 +537,13 @@ def load_user_profile():
 def auto_save():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
-            # Guardar cada 15 segundos o cuando hay cambios importantes
-            if ('last_saved' not in st.session_state or 
-                (datetime.datetime.now() - st.session_state.last_saved).seconds > 15 or
-                st.session_state.get('force_save', False)):
-                
+            if 'last_saved' not in st.session_state or (datetime.datetime.now() - st.session_state.last_saved).seconds > 15:
+                logger.info("Auto-guardando datos...")
                 if save_user_data():
                     st.session_state.last_saved = datetime.datetime.now()
-                    if 'force_save' in st.session_state:
-                        del st.session_state['force_save']
-                    st.toast("Datos guardados", icon="💾")
+                    logger.info("Auto-guardado exitoso")
         except Exception as e:
-            logger.error(f"Error en auto-guardado: {str(e)}")
+            logger.error(f"Error en auto_save: {str(e)}")
 
 # ==============================================
 # Funciones del temporizador mejoradas
