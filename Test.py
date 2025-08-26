@@ -1477,49 +1477,49 @@ def settings_tab():
 
     with col2:
         st.subheader("👤 Perfil de Usuario")
-    
-    # Cargar perfil de usuario
-    user_profile = load_user_profile()
-    if user_profile:
-        current_username = user_profile.get('username', '')
-        current_display_name = user_profile.get('display_name', '')
-        current_email = user_profile.get('email', '')  # Asegurar que tenemos el email
-    else:
-        current_username = ''
-        current_display_name = ''
-        current_email = st.session_state.user.user.email if hasattr(st.session_state.user.user, 'email') else ''
-    
-    new_username = st.text_input("Nombre de usuario", value=current_username)
-    new_display_name = st.text_input("Nombre para mostrar", value=current_display_name)
-    
-    if st.button("💾 Actualizar Perfil"):
-        if not validate_username(new_username):
-            st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
-        else:
-            try:
-                # Asegurarse de que tenemos el email
-                if not current_email and hasattr(st.session_state.user.user, 'email'):
-                    current_email = st.session_state.user.user.email
-                
-                user_id = st.session_state.user.user.id
-                supabase.table('user_profiles').upsert({
-                    'user_id': user_id,
-                    'email': current_email,  # Incluir el email
-                    'username': new_username,
-                    'display_name': new_display_name or new_username,
-                    'updated_at': datetime.datetime.now().isoformat()
-                }).execute()
-                
-                # Actualizar estado local
-                st.session_state.pomodoro_state['username'] = new_username
-                st.session_state.pomodoro_state['display_name'] = new_display_name or new_username
-                
-                st.success("Perfil actualizado!")
-                save_user_data()
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error al actualizar perfil: {str(e)}")
         
+        # Cargar perfil de usuario
+        user_profile = load_user_profile()
+        if user_profile:
+            current_username = user_profile.get('username', '')
+            current_display_name = user_profile.get('display_name', '')
+            current_email = user_profile.get('email', '')
+        else:
+            current_username = ''
+            current_display_name = ''
+            current_email = getattr(st.session_state.user.user, 'email', '') if hasattr(st.session_state.user, 'user') else ''
+        
+        new_username = st.text_input("Nombre de usuario", value=current_username)
+        new_display_name = st.text_input("Nombre para mostrar", value=current_display_name)
+        
+        if st.button("💾 Actualizar Perfil"):
+            if not validate_username(new_username):
+                st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
+            else:
+                try:
+                    # Asegurarse de que tenemos el email
+                    if not current_email and hasattr(st.session_state.user.user, 'email'):
+                        current_email = st.session_state.user.user.email
+                    
+                    user_id = st.session_state.user.user.id
+                    supabase.table('user_profiles').upsert({
+                        'user_id': user_id,
+                        'email': current_email,
+                        'username': new_username,
+                        'display_name': new_display_name or new_username,
+                        'updated_at': datetime.datetime.now().isoformat()
+                    }).execute()
+                    
+                    # Actualizar estado local
+                    st.session_state.pomodoro_state['username'] = new_username
+                    st.session_state.pomodoro_state['display_name'] = new_display_name or new_username
+                    
+                    st.success("Perfil actualizado!")
+                    save_user_data()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al actualizar perfil: {str(e)}")
+            
         st.subheader("🎨 Apariencia")
         theme = st.selectbox("Tema", list(THEMES.keys()), 
                            index=list(THEMES.keys()).index(state['current_theme']))
