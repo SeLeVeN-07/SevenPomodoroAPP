@@ -1203,29 +1203,28 @@ def check_alerts():
     # 1. Verificar tareas próximas a vencer (hoy o próximos 3 días)
     for task in state.get('tasks', []):
         if not task.get('completed', False):
-            deadline = task.get('deadline', today)
+            deadline = task.get('deadline')
+            
+            # Manejar casos donde deadline no es válido
+            if deadline is None:
+                continue
+                
+            # Convertir a date si es string (ajusta el formato según tus datos)
+            if isinstance(deadline, str):
+                try:
+                    deadline = datetime.strptime(deadline, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+            
+            if not isinstance(deadline, date):
+                continue
+                
             days_remaining = (deadline - today).days
             
             if days_remaining == 0:
                 alerts.append(f"⏰ Hoy: {task.get('name', 'Tarea sin nombre')}")
             elif 0 < days_remaining <= 3:
                 alerts.append(f"⚠️ En {days_remaining}d: {task.get('name', 'Tarea sin nombre')}")
-    
-    # 2. Verificar pomodoros pendientes
-    sessions_remaining = state.get('total_sessions', 4) - state.get('session_count', 0)
-    if sessions_remaining > 0:
-        alerts.append(f"🍅 {sessions_remaining} pomodoro(s) pendiente(s)")
-    
-    # 3. Verificar si hay actividades sin proyectos
-    if state.get('current_activity') and state.get('current_project') == "Ninguno":
-        alerts.append(f"📌 Actividad '{state['current_activity']}' sin proyecto asignado")
-    
-    # Mostrar alertas si existen
-    if alerts:
-        with st.sidebar:
-            st.subheader("🔔 Alertas Recientes")
-            for alert in alerts:
-                st.warning(alert, icon="⚠️")
 
 def sidebar():
     state = st.session_state.pomodoro_state
@@ -1286,5 +1285,6 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
