@@ -44,6 +44,7 @@ SUPABASE_KEY = os.getenv('SUPABASE_KEY', "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e
 def init_supabase():
     try:
         client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        # Verificar conexión con una consulta simple
         client.table('user_data').select('*').limit(1).execute()
         logger.info("Conexión a Supabase establecida")
         return client
@@ -93,7 +94,7 @@ def get_default_state():
         'last_update': None,
         'current_theme': 'Claro',
         'activities': ["Estudio", "Trabajo"],
-        'current_activity': "",
+        'current_activity': "Trabajo",
         'tasks': [],
         'projects': [],
         'achievements': {
@@ -156,7 +157,7 @@ def validate_state(state):
         # Validar actividad actual
         if 'current_activity' in state and state['current_activity']:
             if state['current_activity'] not in state['activities']:
-                state['current_activity'] = ""
+                state['current_activity'] = state['activities'][0] if state['activities'] else ""
     
     # 3. Validar configuración del temporizador
     timer_settings = [
@@ -212,6 +213,38 @@ def validate_state(state):
         state['current_theme'] = 'Claro'
     
     # 9. Actualizar versión de datos
+    state['data_version'] = default_state['data_version']
+    
+    return state
+
+def safe_validate_state(state):
+    """
+    Versión segura de validación que no sobrescribe valores existentes
+    excepto cuando son claramente inválidos
+    """
+    default_state = get_default_state()
+    
+    # 1. Validar solo campos críticos
+    if not isinstance(state.get('activities', []), list):
+        state['activities'] = default_state['activities']
+    
+    # 2. Validar configuraciones del temporizador sin sobrescribir si son válidas
+    timer_settings = [
+        ('work_duration', 25*60, 5*60, 120*60),
+        ('short_break', 5*60, 1*60, 30*60),
+        ('long_break', 15*60, 5*60, 60*60)
+    ]
+    
+    for setting, default, min_val, max_val in timer_settings:
+        current = state.get(setting)
+        if not isinstance(current, (int, float)) or not (min_val <= current <= max_val):
+            state[setting] = default
+    
+    # 3. Asegurar campos obligatorios sin borrar datos existentes
+    state.setdefault('achievements', default_state['achievements'])
+    state.setdefault('session_history', [])
+    
+    # 4. Mantener la versión de datos actual
     state['data_version'] = default_state['data_version']
     
     return state
@@ -306,52 +339,27 @@ def auth_section():
 # ==============================================
 def load_user_data():
     if 'user' not in st.session_state or not st.session_state.user:
-        logger.warning("Intento de carga sin usuario autenticado")
         return None
 
     try:
-        # Obtener user_id de forma segura
-        user_id = str(getattr(st.session_state.user.user, 'id', ''))
-        if not user_id:
-            logger.error("No se pudo obtener user_id")
-            return None
+        response = supabase.table('user_data').select('pomodoro_data').eq(
+            'user_id', str(st.session_state.user.user.id)
+        ).execute()
 
-        # Verificar conexión a Supabase
-        if not supabase:
-            logger.error("Conexión a Supabase no establecida")
-            return None
-
-        # Intento de carga con reintentos
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Intento de carga {attempt + 1}/{max_retries}")
-                
-                response = supabase.table('user_data').select('*').eq(
-                    'user_id', user_id
-                ).execute()
-
-                if not response.data:
-                    logger.info("No se encontraron datos para este usuario")
-                    return None
-                
-                # Verificar estructura básica de los datos
-                if 'pomodoro_data' not in response.data[0]:
-                    logger.error("Estructura de datos inválida en Supabase")
-                    return None
-                
-                logger.info("Datos cargados exitosamente desde Supabase")
-                return response.data[0]['pomodoro_data']
-
-            except Exception as e:
-                logger.error(f"Intento {attempt + 1} fallido: {str(e)}")
-                if attempt == max_retries - 1:
-                    raise  # Relanzar el error después del último intento
-                time.sleep(1)  # Esperar antes de reintentar
-
+        if not response.data:
+            return None  # No hay datos guardados aún
+            
+        data = response.data[0]['pomodoro_data']
+        
+        # Solo validar datos esenciales
+        if not isinstance(data, dict):
+            raise ValueError("Formato de datos inválido")
+            
+        return data
+        
     except Exception as e:
-        logger.error(f"Error al cargar datos del usuario: {str(e)}", exc_info=True)
-        st.error("Error al cargar datos. Usando configuración por defecto.")
+        logger.error(f"Error parcial al cargar datos: {str(e)}")
+        # Retorna None para que main() use valores por defecto
         return None
         
 def save_user_data():
@@ -842,6 +850,7 @@ def delete_project(state, project_id):
         logger.error(f"Error al eliminar proyecto: {str(e)}")
         st.error("Error al eliminar proyecto")
         return False
+
 def add_activity(activity_name):
     try:
         if 'pomodoro_state' not in st.session_state:
@@ -883,6 +892,46 @@ def add_activity(activity_name):
         logger.error(error_msg, exc_info=True)
         st.error("Error técnico al agregar actividad. Verifica los logs.")
         return False
+
+def remove_activity(activity_name):
+    try:
+        if 'pomodoro_state' not in st.session_state:
+            logger.error("Estado Pomodoro no disponible")
+            return False
+            
+        activities = st.session_state.pomodoro_state.get('activities', [])
+        
+        # Buscar coincidencia exacta (case sensitive)
+        if activity_name not in activities:
+            st.warning(f"La actividad '{activity_name}' no existe")
+            return False
+            
+        # No permitir eliminar actividades básicas
+        protected_activities = ['Trabajo']
+        if activity_name in protected_activities:
+            st.error(f"No se puede eliminar la actividad '{activity_name}' (es requerida)")
+            return False
+            
+        # Eliminar la actividad
+        st.session_state.pomodoro_state['activities'].remove(activity_name)
+        
+        # Actualizar actividad actual si es necesario
+        if st.session_state.pomodoro_state.get('current_activity') == activity_name:
+            st.session_state.pomodoro_state['current_activity'] = ""
+        
+        # Guardar cambios
+        if save_user_data():
+            st.success(f"Actividad '{activity_name}' eliminada")
+            logger.info(f"Actividad '{activity_name}' eliminada exitosamente")
+            return True
+        else:
+            st.error("Error al guardar los cambios")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error al eliminar actividad: {str(e)}", exc_info=True)
+        st.error("Error técnico al eliminar actividad")
+        return False
         
 # ==============================================
 # Interfaz de usuario mejorada
@@ -893,6 +942,9 @@ def timer_tab():
     
     with st.form(key='timer_form'):
         # Selector de actividad
+        if not state['activities']:
+            state['activities'] = ["Trabajo"]
+            
         state['current_activity'] = st.selectbox(
             "Actividad",
             state['activities'],
@@ -1033,7 +1085,8 @@ def tasks_tab():
             with col2:
                 due_date = st.date_input(
                     "Fecha de vencimiento",
-                    value=editing_task['due_date'] if editing_task and editing_task['due_date'] else datetime.date.today()
+                    value=editing_task['due_date'] if editing_task and editing_task['due_date'] else datetime.date.today(),
+                    key=f"due_date_{state['editing_task_id'] or 'new'}"
                 )
             
             # Selector de proyecto
@@ -1041,14 +1094,15 @@ def tasks_tab():
             project_index = 0
             if editing_task and editing_task['project']:
                 for i, project in enumerate(state['projects']):
-                    if project['name'] == editing_task['project']:
+                    if project['id'] == editing_task['project']:
                         project_index = i + 1
                         break
             
             project = st.selectbox(
                 "Proyecto",
                 project_options,
-                index=project_index
+                index=project_index,
+                key=f"project_{state['editing_task_id'] or 'new'}"
             )
             
             col1, col2 = st.columns(2)
@@ -1056,7 +1110,8 @@ def tasks_tab():
                 if st.form_submit_button("💾 Guardar"):
                     if name:
                         if editing_task:
-                            update_task(state, editing_task['id'], name, description, priority, due_date, project)
+                            update_task(state, editing_task['id'], name=name, description=description, 
+                                       priority=priority, due_date=due_date, project=project)
                             st.success("Tarea actualizada!")
                         else:
                             add_task(state, name, description, priority, due_date, project)
@@ -1155,7 +1210,13 @@ def tasks_tab():
         filtered_tasks = [task for task in filtered_tasks if task['priority'] == filter_priority]
     
     if filter_project != "Todos":
-        filtered_tasks = [task for task in filtered_tasks if task['project'] == filter_project]
+        # Encontrar el ID del proyecto seleccionado
+        project_id = ""
+        for project in state['projects']:
+            if project['name'] == filter_project:
+                project_id = project['id']
+                break
+        filtered_tasks = [task for task in filtered_tasks if task['project'] == project_id]
     
     # Mostrar tareas
     if not filtered_tasks:
@@ -1173,9 +1234,18 @@ def tasks_tab():
                     }
                     
                     st.write(f"{status_icon} **{task['name']}**")
+                    
+                    # Obtener nombre del proyecto
+                    project_name = "Ninguno"
+                    if task['project']:
+                        for project in state['projects']:
+                            if project['id'] == task['project']:
+                                project_name = project['name']
+                                break
+                    
                     st.caption(f"📅 Vence: {task['due_date'].strftime('%d/%m/%Y') if task['due_date'] else 'Sin fecha'} | "
                             f"🔺 Prioridad: :{priority_color[task['priority']]}[{task['priority']}] | "
-                            f"📂 Proyecto: {task['project'] or 'Ninguno'}")
+                            f"📂 Proyecto: {project_name}")
                     
                     if task['description']:
                         st.write(f"📝 {task['description']}")
@@ -1318,90 +1388,35 @@ def settings_tab():
             state['current_theme'] = theme
             st.rerun()
         
-        st.subheader("📝 Actividades")
-        new_activity = st.text_input("Nueva actividad")
-        if st.button("➕ Añadir") and new_activity:
-            if new_activity not in state['activities']:
-                state['activities'].append(new_activity)
-                save_user_data()
-                st.rerun()
-        
-        if state['activities']:
-            activity_to_remove = st.selectbox("Eliminar actividad", state['activities'])
-            if st.button("➖ Eliminar"):
-                state['activities'].remove(activity_to_remove)
-                if state['current_activity'] == activity_to_remove:
-                    state['current_activity'] = ""
-                save_user_data()
         st.subheader("📝 Gestión de Actividades")
     
-    # Lista actual de actividades
-    st.write("Actividades disponibles:")
-    activities = st.session_state.pomodoro_state.get('activities', [])
-    st.write(activities)
-    
-    # Formulario para agregar
-    with st.form("add_activity_form"):
-        new_activity = st.text_input("Nueva actividad", key="new_activity_input")
-        submitted = st.form_submit_button("➕ Agregar Actividad")
-        
-        if submitted:
-            if new_activity:
-                if add_activity(new_activity.strip()):
-                    st.rerun()
-            else:
-                st.warning("Ingresa un nombre para la actividad")
-    
-    # Opción para eliminar
-    if activities:
-        to_delete = st.selectbox("Selecciona actividad a eliminar", 
-                               [""] + activities,
-                               key="delete_activity_select")
-        
-        if to_delete and st.button("➖ Eliminar Actividad"):
-            if remove_activity(to_delete):
-                st.rerun()
-                
-def remove_activity(activity_name):
-    try:
-        if 'pomodoro_state' not in st.session_state:
-            logger.error("Estado Pomodoro no disponible")
-            return False
-            
+        # Lista actual de actividades
+        st.write("Actividades disponibles:")
         activities = st.session_state.pomodoro_state.get('activities', [])
+        st.write(activities)
         
-        # Buscar coincidencia exacta (case sensitive)
-        if activity_name not in activities:
-            st.warning(f"La actividad '{activity_name}' no existe")
-            return False
+        # Formulario para agregar
+        with st.form("add_activity_form"):
+            new_activity = st.text_input("Nueva actividad", key="new_activity_input")
+            submitted = st.form_submit_button("➕ Agregar Actividad")
             
-        # No permitir eliminar actividades básicas
-        protected_activities = ['Trabajo']
-        if activity_name in protected_activities:
-            st.error(f"No se puede eliminar la actividad '{activity_name}' (es requerida)")
-            return False
+            if submitted:
+                if new_activity:
+                    if add_activity(new_activity.strip()):
+                        st.rerun()
+                else:
+                    st.warning("Ingresa un nombre para la actividad")
+        
+        # Opción para eliminar
+        if activities:
+            to_delete = st.selectbox("Selecciona actividad a eliminar", 
+                                   [""] + activities,
+                                   key="delete_activity_select")
             
-        # Eliminar la actividad
-        st.session_state.pomodoro_state['activities'].remove(activity_name)
-        
-        # Actualizar actividad actual si es necesario
-        if st.session_state.pomodoro_state.get('current_activity') == activity_name:
-            st.session_state.pomodoro_state['current_activity'] = ""
-        
-        # Guardar cambios
-        if save_user_data():
-            st.success(f"Actividad '{activity_name}' eliminada")
-            logger.info(f"Actividad '{activity_name}' eliminada exitosamente")
-            return True
-        else:
-            st.error("Error al guardar los cambios")
-            return False
-            
-    except Exception as e:
-        logger.error(f"Error al eliminar actividad: {str(e)}", exc_info=True)
-        st.error("Error técnico al eliminar actividad")
-        return False
-        
+            if to_delete and st.button("➖ Eliminar Actividad"):
+                if remove_activity(to_delete):
+                    st.rerun()
+
 def sidebar():
     auth_section()
     
@@ -1534,205 +1549,80 @@ def main():
     
     else:
         # Pantalla de bienvenida para usuarios no autenticados
-        render_welcome_screen()
-
-def render_welcome_screen():
-    """Renderiza la pantalla de bienvenida para usuarios no autenticados"""
-    st.title("🍅 Pomodoro Pro")
-    st.markdown("""
-    ### ¡Bienvenido a Pomodoro Pro!
-    
-    Para comenzar:
-    1. Crea una cuenta o inicia sesión en la barra lateral
-    2. Configura tus tiempos preferidos
-    3. Comienza a mejorar tu productividad
-    
-    **Características:**
-    - Temporizador Pomodoro personalizable
-    - Gestión de tareas y proyectos
-    - Seguimiento de tu progreso
-    - Estadísticas detalladas
-    - Almacenamiento en la nube
-    - Perfil de usuario personalizable
-    """)
-    
-    # Sección de demostración
-    st.divider()
-    st.subheader("Demostración del Temporizador")
-    render_demo_timer()
-    
-    # Sección de información adicional
-    st.divider()
-    render_info_sections()
-    
-    # Footer
-    st.divider()
-    st.markdown("""
-    <div style="text-align: center; color: #666; font-size: 0.9em;">
-    Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
-    </div>
-    """, unsafe_allow_html=True)
-
-def render_demo_timer():
-    """Renderiza el temporizador de demostración"""
-    demo_time = st.slider("Tiempo de demostración (minutos)", 1, 60, 25)
-    demo_phase = st.selectbox("Fase de demostración", ["Trabajo", "Descanso Corto", "Descanso Largo"])
-    
-    theme = THEMES['Claro']
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=demo_time * 60,
-        number={'suffix': "s", 'font': {'size': 40}},
-        gauge={
-            'axis': {'range': [0, demo_time * 60], 'visible': False},
-            'bar': {'color': get_phase_color(demo_phase)},
-            'steps': [{'range': [0, demo_time * 60], 'color': theme['circle_bg']}]
-        },
-        domain={'x': [0, 1], 'y': [0, 1]},
-        title={'text': f"{demo_phase} - {format_time(demo_time * 60)}", 'font': {'size': 24}}
-    ))
-    fig.update_layout(height=300, margin=dict(l=10, r=10, t=80, b=10))
-    st.plotly_chart(fig, use_container_width=True)
-
-def render_info_sections():
-    """Renderiza las secciones de información"""
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("¿Qué es Pomodoro?")
+        st.title("🍅 Pomodoro Pro")
         st.markdown("""
-        La Técnica Pomodoro es un método de gestión del tiempo que:
-        - Divide el trabajo en intervalos de 25 minutos
-        - Separa cada intervalo con breves descansos
-        - Mejora la concentración y productividad
-        - Reduce la fatiga mental
+        ### ¡Bienvenido a Pomodoro Pro!
+        
+        Para comenzar:
+        1. Crea una cuenta o inicia sesión en la barra lateral
+        2. Configura tus tiempos preferidos
+        3. Comienza a mejorar tu productividad
+        
+        **Características:**
+        - Temporizador Pomodoro personalizable
+        - Gestión de tareas y proyectos
+        - Seguimiento de tu progreso
+        - Estadísticas detalladas
+        - Almacenamiento en la nube
+        - Perfil de usuario personalizable
         """)
-    
-    with col2:
-        st.subheader("Beneficios Clave")
+        
+        # Sección de demostración
+        st.divider()
+        st.subheader("Demostración del Temporizador")
+        
+        # Temporizador de demostración
+        demo_time = st.slider("Tiempo de demostración (minutos)", 1, 60, 25)
+        demo_phase = st.selectbox("Fase de demostración", ["Trabajo", "Descanso Corto", "Descanso Largo"])
+        
+        theme = THEMES['Claro']
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=demo_time * 60,
+            number={'suffix': "s", 'font': {'size': 40}},
+            gauge={
+                'axis': {'range': [0, demo_time * 60], 'visible': False},
+                'bar': {'color': get_phase_color(demo_phase)},
+                'steps': [{'range': [0, demo_time * 60], 'color': theme['circle_bg']}]
+            },
+            domain={'x': [0, 1], 'y': [0, 1]},
+            title={'text': f"{demo_phase} - {format_time(demo_time * 60)}", 'font': {'size': 24}}
+        ))
+        fig.update_layout(height=300, margin=dict(l=10, r=10, t=80, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Sección de información adicional
+        st.divider()
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("¿Qué es Pomodoro?")
+            st.markdown("""
+            La Técnica Pomodoro es un método de gestión del tiempo que:
+            - Divide el trabajo en intervalos de 25 minutos
+            - Separa cada intervalo con breves descansos
+            - Mejora la concentración y productividad
+            - Reduce la fatiga mental
+            """)
+        
+        with col2:
+            st.subheader("Beneficios Clave")
+            st.markdown("""
+            - ✅ Mayor enfoque en las tareas
+            - ⏱️ Mejor gestión del tiempo
+            - 📈 Seguimiento de tu progreso
+            - 🧠 Menos estrés y fatiga
+            """)
+            
+        # Footer
+        st.divider()
         st.markdown("""
-        - ✅ Mayor enfoque en las tareas
-        - ⏱️ Mejor gestión del tiempo
-        - 📈 Seguimiento de tu progreso
-        - 🧠 Menos estrés y fatiga
-        """)
-if __name__ == "__main__":
-    # Verificar y mantener la sesión activa
-    if 'user' in st.session_state and st.session_state.user:
-        try:
-            # Verificar si el token sigue siendo válido
-            user = supabase.auth.get_user()
-            if not user:
-                st.session_state.user = None
-                st.session_state.pomodoro_state = None
-                st.rerun()
-        except Exception as e:
-            logger.error(f"Error al verificar sesión: {str(e)}")
-            st.session_state.user = None
-            st.session_state.pomodoro_state = None
-            st.rerun()
-    
-    try:
-        main()
-    except Exception as e:
-        logger.error(f"Error crítico: {str(e)}")
-        st.error("¡Oops! Algo salió mal. Por favor recarga la página.")
-        if st.button("Recargar aplicación"):
-            st.session_state.clear()
-            st.rerun()
-
-#####DEBUG################################################
-
-def debug_user_data():
-    if 'user' in st.session_state and st.session_state.user:
-        st.subheader("🔍 Debug - Carga de Datos")
-        
-        try:
-            user_id = str(st.session_state.user.user.id)
-            st.write(f"User ID: {user_id}")
-            
-            # Verificar conexión
-            st.write("Verificando conexión a Supabase...")
-            test = supabase.table('user_data').select('id').limit(1).execute()
-            st.write("Conexión exitosa:", bool(test.data))
-            
-            # Intentar cargar datos específicos
-            st.write("Intentando cargar datos...")
-            data = supabase.table('user_data').select('*').eq('user_id', user_id).execute()
-            
-            if data.data:
-                st.write("Datos encontrados:", data.data[0].keys())
-                st.json(data.data[0]['pomodoro_data'])
-            else:
-                st.warning("No se encontraron datos para este usuario")
-                
-        except Exception as e:
-            st.error(f"Error en debug: {str(e)}")
-
-# Llama a esta función después de iniciar sesión
-if 'user' in st.session_state and st.session_state.user:
-    debug_user_data()
-
-def debug_activities():
-    if 'user' in st.session_state and st.session_state.user:
-        st.subheader("🔍 Debug - Actividades")
-        
-        try:
-            # Mostrar actividades locales
-            st.write("**Actividades en estado local:**")
-            st.write(st.session_state.pomodoro_state.get('activities', []))
-            
-            # Verificar en Supabase
-            response = supabase.table('user_data').select('pomodoro_data->activities').eq(
-                'user_id', str(st.session_state.user.user.id)
-            ).execute()
-            
-            st.write("**Actividades en Supabase:**")
-            if response.data:
-                st.write(response.data[0]['pomodoro_data']['activities'])
-            else:
-                st.warning("No se encontraron datos en Supabase")
-                
-            # Verificar estructura completa
-            if st.button("Ver estado completo en Supabase"):
-                full_data = supabase.table('user_data').select('*').eq(
-                    'user_id', str(st.session_state.user.user.id)
-                ).execute()
-                st.json(full_data.data[0] if full_data.data else {})
-                
-        except Exception as e:
-            st.error(f"Error en debug: {str(e)}")
-
-# Llama a esta función en tu settings_tab()
-
-# Agrega esto temporalmente para debug
-if st.button('Forzar guardado y ver estado'):
-    st.write("Estado actual:", st.session_state.pomodoro_state)
-    success = save_user_data()
-    st.write(f"Guardado exitoso: {success}")
-    # Verificar en BD
-    try:
-        data = supabase.table('user_data').select('*').execute()
-        st.write("Datos en BD:", data.data)
-    except Exception as e:
-        st.error(f"Error al leer BD: {str(e)}")
+        <div style="text-align: center; color: #666; font-size: 0.9em;">
+        Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
+        </div>
+        """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    # Verificar y mantener la sesión activa
-    if 'user' in st.session_state and st.session_state.user:
-        try:
-            # Verificar si el token sigue siendo válido
-            user = supabase.auth.get_user()
-            if not user:
-                st.session_state.user = None
-                st.session_state.pomodoro_state = None
-                st.rerun()
-        except Exception as e:
-            logger.error(f"Error al verificar sesión: {str(e)}")
-            st.session_state.user = None
-            st.session_state.pomodoro_state = None
-            st.rerun()
-    
     try:
         main()
     except Exception as e:
