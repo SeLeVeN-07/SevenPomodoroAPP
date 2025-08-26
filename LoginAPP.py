@@ -173,13 +173,26 @@ def save_user_data():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
             user_id = st.session_state.user.user.id
-            data = st.session_state.pomodoro_state
+            data = st.session_state.pomodoro_state.copy()  # Hacer una copia para no modificar el original
+            
+            # Función recursiva para convertir datetime a string
+            def convert_datetime(obj):
+                if isinstance(obj, (datetime.datetime, datetime.date)):
+                    return obj.isoformat()
+                elif isinstance(obj, list):
+                    return [convert_datetime(item) for item in obj]
+                elif isinstance(obj, dict):
+                    return {key: convert_datetime(value) for key, value in obj.items()}
+                return obj
+            
+            # Convertir todos los datetime en los datos
+            serialized_data = convert_datetime(data)
             
             # Usamos upsert para crear o actualizar el registro
             response = supabase.table('user_data').upsert({
                 'user_id': user_id,
                 'email': st.session_state.user.user.email,
-                'pomodoro_data': data,
+                'pomodoro_data': serialized_data,
                 'last_updated': datetime.datetime.now().isoformat()
             }).execute()
             
@@ -199,7 +212,25 @@ def load_user_data():
             response = supabase.table('user_data').select('*').eq('user_id', user_id).execute()
             
             if response.data:
-                return response.data[0]['pomodoro_data']
+                data = response.data[0]['pomodoro_data']
+                
+                # Función para convertir strings ISO a datetime
+                def parse_datetime(obj):
+                    if isinstance(obj, str):
+                        try:
+                            return datetime.datetime.fromisoformat(obj)
+                        except ValueError:
+                            try:
+                                return datetime.date.fromisoformat(obj)
+                            except ValueError:
+                                return obj
+                    elif isinstance(obj, list):
+                        return [parse_datetime(item) for item in obj]
+                    elif isinstance(obj, dict):
+                        return {key: parse_datetime(value) for key, value in obj.items()}
+                    return obj
+                
+                return parse_datetime(data)
         except Exception as e:
             st.error(f"Error al cargar datos: {str(e)}")
     return None
@@ -260,14 +291,13 @@ def log_session():
     if state['total_active_time'] >= 0.1:
         minutes = round(state['total_active_time'] / 60, 2)
         log_entry = {
-            'Fecha': datetime.datetime.now().strftime("%Y-%m-%d"),
-            'Hora Inicio': state['start_time'].strftime("%H:%M:%S") if state['start_time'] else datetime.datetime.now().strftime("%H:%M:%S"),
+            'Fecha': datetime.datetime.now().date().isoformat(),  # Convertir a string
+            'Hora Inicio': (state['start_time'] or datetime.datetime.now()).strftime("%H:%M:%S"),
             'Tiempo Activo (min)': minutes,
             'Actividad': state['current_activity'],
             'Proyecto': state['current_project'],
             'Tarea': state.get('current_task', '')
         }
-        
         # Guardar en el historial de sesiones
         state['session_history'].append(log_entry)
         
