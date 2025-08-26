@@ -1205,18 +1205,25 @@ def check_alerts():
         if not task.get('completed', False):
             deadline = task.get('deadline')
             
-            # Manejar casos donde deadline no es válido
+            # Si no hay fecha límite, saltar esta tarea
             if deadline is None:
                 continue
                 
             # Convertir a date si es string (ajusta el formato según tus datos)
             if isinstance(deadline, str):
                 try:
-                    deadline = datetime.strptime(deadline, "%Y-%m-%d").date()
+                    # Intentar parsear con diferentes formatos
+                    try:
+                        deadline = datetime.datetime.strptime(deadline, "%Y-%m-%d").date()
+                    except ValueError:
+                        # Intentar otro formato si el primero falla
+                        deadline = datetime.datetime.strptime(deadline, "%d/%m/%Y").date()
                 except ValueError:
+                    # Si no se puede parsear, saltar esta tarea
                     continue
-            
-            if not isinstance(deadline, date):
+            elif isinstance(deadline, datetime.datetime):
+                deadline = deadline.date()
+            elif not isinstance(deadline, date):
                 continue
                 
             days_remaining = (deadline - today).days
@@ -1225,6 +1232,14 @@ def check_alerts():
                 alerts.append(f"⏰ Hoy: {task.get('name', 'Tarea sin nombre')}")
             elif 0 < days_remaining <= 3:
                 alerts.append(f"⚠️ En {days_remaining}d: {task.get('name', 'Tarea sin nombre')}")
+            elif days_remaining < 0:
+                alerts.append(f"❌ Vencida hace {-days_remaining}d: {task.get('name', 'Tarea sin nombre')}")
+    
+    # Mostrar alertas si las hay
+    if alerts:
+        st.sidebar.subheader("🔔 Alertas")
+        for alert in alerts:
+            st.sidebar.warning(alert)
 
 def sidebar():
     state = st.session_state.pomodoro_state
@@ -1239,7 +1254,7 @@ def sidebar():
                         "🏆 Logros", "⚙️ Configuración", "ℹ️ Info"],
                        key='sidebar_nav')
 
-        # Sistema de alertas
+        # Mostrar alertas
         check_alerts()
 
         # Características de estudio
@@ -1285,6 +1300,7 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
 
