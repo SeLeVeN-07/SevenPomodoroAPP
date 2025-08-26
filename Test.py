@@ -372,10 +372,10 @@ def auth_section():
 def save_user_data():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
+            # Convertir el estado a formato serializable
             state = st.session_state.pomodoro_state.copy()
-            logger.info(f"Intentando guardar datos. Actividad actual: {state.get('current_activity', 'Ninguna')}")
             
-            # Función para serializar objetos datetime
+            # Función de serialización mejorada
             def convert_datetime(obj):
                 if isinstance(obj, (datetime.datetime, datetime.date)):
                     return obj.isoformat()
@@ -385,61 +385,45 @@ def save_user_data():
                     return {k: convert_datetime(v) for k, v in obj.items()}
                 return obj
             
-            # Serializar el estado completo
             serialized_data = convert_datetime(state)
-            logger.debug(f"Datos serializados: {serialized_data}")
             
-            # Manejo seguro del user_id
-            user_id = st.session_state.user.user.id
-            if not isinstance(user_id, uuid.UUID):
-                try:
-                    user_id = uuid.UUID(str(user_id))
-                    logger.debug(f"User_id convertido a UUID: {user_id}")
-                except (ValueError, AttributeError) as e:
-                    logger.error(f"Formato de user_id inválido: {user_id}. Error: {str(e)}")
+            # Asegurar que el user_id sea UUID válido
+            try:
+                user_id = uuid.UUID(str(st.session_state.user.user.id))
+            except (ValueError, AttributeError) as e:
+                logger.error(f"ID de usuario inválido: {str(e)}")
+                return False
+
+            # Verificar que el email existe
+            if not hasattr(st.session_state.user.user, 'email') or not st.session_state.user.user.email:
+                logger.error("No se encontró email en el objeto de usuario")
+                return False
+
+            # Intento de guardado con verificación
+            try:
+                response = supabase.table('user_data').upsert({
+                    'user_id': str(user_id),
+                    'email': st.session_state.user.user.email,  # Asegurar que el email está incluido
+                    'pomodoro_data': serialized_data,
+                    'last_updated': datetime.datetime.now().isoformat()
+                }).execute()
+
+                if not response.data:
+                    logger.error("La respuesta de Supabase está vacía")
                     return False
-            
-            # Intento de guardado con reintentos
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    logger.info(f"Intento de guardado {attempt + 1}/{max_retries}")
-                    
-                    response = supabase.table('user_data').upsert({
-                        'user_id': str(user_id),
-                        'email': st.session_state.user.user.email,
-                        'pomodoro_data': serialized_data,
-                        'last_updated': datetime.datetime.now().isoformat()
-                    }).execute()
-                    
-                    logger.info(f"Datos guardados exitosamente. Respuesta: {response}")
-                    st.session_state.last_saved = datetime.datetime.now()
-                    
-                    # Verificar que los datos se guardaron correctamente
-                    if response.data and len(response.data) > 0:
-                        logger.debug("Respuesta contiene datos confirmando el guardado")
-                        return True
-                    else:
-                        logger.warning("La respuesta no contiene datos de confirmación")
-                        continue
-                        
-                except Exception as e:
-                    logger.error(f"Intento {attempt + 1} fallido. Error: {str(e)}", exc_info=True)
-                    if attempt == max_retries - 1:
-                        logger.error("Fallo después de todos los reintentos")
-                        st.error("Error al guardar datos. Intente nuevamente.")
-                        return False
-                    time.sleep(1)  # Espera progresiva entre reintentos
-            
-            return True
-            
+
+                logger.info("Datos guardados exitosamente")
+                return True
+
+            except Exception as e:
+                logger.error(f"Error al guardar en Supabase: {str(e)}")
+                st.error("Error al guardar datos. Verifica la conexión.")
+                return False
+
         except Exception as e:
-            logger.error(f"Error inesperado en save_user_data: {str(e)}", exc_info=True)
-            st.error("Error crítico al guardar datos. Consulte los logs.")
+            logger.error(f"Error inesperado: {str(e)}")
             return False
-    else:
-        logger.warning("Intento de guardado sin usuario autenticado o estado pomodoro")
-        return False
+    return False
 
 def load_user_data():
     if 'user' in st.session_state and st.session_state.user:
@@ -523,17 +507,71 @@ def load_user_data():
 def load_user_profile():
     if 'user' in st.session_state and st.session_state.user:
         try:
-            response = supabase.table('user_profiles').select('*').eq(
-                'user_id', st.session_state.user.user.id
-            ).execute()
+            user_id = str(st.session_state.user.user.id)
+            email = getattr(st.session_state.user.user, 'email', '')
+            
+            # Intentar cargar perfil existente
+            response = supabase.table('user_profiles').select('*').eq('user_id', user_id).execute()
             
             if response.data:
                 return response.data[0]
+            else:
+                # Crear nuevo perfil si no existe
+                new_profile = {
+                    'user_id': user_id,
+                    'email': email,  # Obligatorio
+                    'username': f"user_{user_id[:8]}",
+                    'display_name': email.split('@')[0],
+                    'created_at': datetime.datetime.now().isoformat()
+                }
+                
+                insert_response = supabase.table('user_profiles').insert(new_profile).execute()
+                return insert_response.data[0] if insert_response.data else None
+                
         except Exception as e:
             logger.error(f"Error al cargar perfil: {str(e)}")
-    
+            return None
     return None
 
+def update_user_profile(username, display_name):
+    if 'user' in st.session_state and st.session_state.user:
+        try:
+            # Asegurarse de que tenemos el email del usuario
+            if not hasattr(st.session_state.user.user, 'email') or not st.session_state.user.user.email:
+                st.error("No se encontró dirección de email en la sesión")
+                return False
+                
+            user_id = str(st.session_state.user.user.id)
+            email = st.session_state.user.user.email
+            
+            # Datos para actualizar (incluyendo el email obligatorio)
+            update_data = {
+                'user_id': user_id,
+                'email': email,  # Campo obligatorio
+                'username': username,
+                'display_name': display_name or username,
+                'updated_at': datetime.datetime.now().isoformat()
+            }
+            
+            # Usar upsert para crear o actualizar
+            response = supabase.table('user_profiles').upsert(update_data).execute()
+            
+            if response.data:
+                st.session_state.pomodoro_state['username'] = username
+                st.session_state.pomodoro_state['display_name'] = display_name or username
+                st.success("¡Perfil actualizado correctamente!")
+                return True
+            else:
+                st.error("No se recibieron datos de confirmación")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error al actualizar perfil: {str(e)}")
+            st.error("Error técnico al actualizar el perfil. Intente nuevamente.")
+            return False
+    else:
+        st.error("No hay usuario autenticado")
+        return False
 def auto_save():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
@@ -1491,6 +1529,19 @@ def main():
         Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
         </div>
         """, unsafe_allow_html=True)
+
+#####DEBUG################################################
+# Agrega esto temporalmente para debug
+if st.button('Forzar guardado y ver estado'):
+    st.write("Estado actual:", st.session_state.pomodoro_state)
+    success = save_user_data()
+    st.write(f"Guardado exitoso: {success}")
+    # Verificar en BD
+    try:
+        data = supabase.table('user_data').select('*').execute()
+        st.write("Datos en BD:", data.data)
+    except Exception as e:
+        st.error(f"Error al leer BD: {str(e)}")
 
 if __name__ == "__main__":
     # Verificar y mantener la sesión activa
