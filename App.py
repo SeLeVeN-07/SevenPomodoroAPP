@@ -790,13 +790,13 @@ def timer_tab():
                 state['session_count'] += 1
                 
                 if state['session_count'] >= state['total_sessions']:
-                st.success("¡Todas las sesiones completadas!")
-                state['session_count'] = 0
-                state['current_phase'] = "Trabajo"
-                state['remaining_time'] = state['work_duration']
-                state['timer_running'] = False
-                state['timer_paused'] = False
-                st.rerun()
+                    st.success("¡Todas las sesiones completadas!")
+                    state['session_count'] = 0
+                    state['current_phase'] = "Trabajo"
+                    state['remaining_time'] = state['work_duration']
+                    state['timer_running'] = False
+                    state['timer_paused'] = False
+                    st.rerun()
         
         # Determinar siguiente fase
         state['current_phase'] = determine_next_phase(was_work)
