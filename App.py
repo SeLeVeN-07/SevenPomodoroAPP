@@ -510,27 +510,14 @@ def display_filtered_tasks(filter_activity, filter_project, task_status):
     # Aplicar filtros
     filtered_tasks = []
     for task in state['tasks'] + state['completed_tasks']:
-        # Filtrar por estado
-        if task_status == "Pendientes" and task['completed']:
-            continue
-        if task_status == "Completadas" and not task['completed']:
-            continue
-        
-        # Filtrar por actividad
-        if filter_activity != "Todas" and task.get('activity') != filter_activity:
-            continue
-            
-        # Filtrar por proyecto
-        if filter_project != "Todos" and task['project'] != filter_project:
-            continue
-            
+        # [Mantén tu lógica de filtrado actual...]
         filtered_tasks.append(task)
     
-    # Mostrar tareas filtradas
+    # Mostrar tareas filtradas (VERSIÓN CORREGIDA)
     if not filtered_tasks:
         st.info("No hay tareas que coincidan con los filtros")
     else:
-        for task in filtered_tasks:
+        for i, task in enumerate(filtered_tasks):  # Usar enumerate para índice único
             with st.container(border=True):
                 cols = st.columns([4, 1, 1, 1])
                 with cols[0]:
@@ -539,13 +526,13 @@ def display_filtered_tasks(filter_activity, filter_project, task_status):
                     st.caption(f"Proyecto: {task['project']} | Prioridad: {task['priority']} | Vence: {task['deadline']}")
                 
                 with cols[1]:
-                    if st.button("✏️", key=f"edit_{task['name']}_{task['project']}"):
+                    if st.button("✏️", key=f"edit_{i}_{task['name']}_{task['project']}"):  # Clave única con índice
                         state['editing_task'] = task
                         st.rerun()
                 
                 with cols[2]:
                     if not task['completed']:
-                        if st.button("✓", key=f"complete_{task['name']}_{task['project']}"):
+                        if st.button("✓", key=f"complete_{i}_{task['name']}_{task['project']}"):  # Clave única con índice
                             task['completed'] = True
                             task['completed_date'] = date.today()
                             state['tasks'].remove(task)
@@ -557,14 +544,13 @@ def display_filtered_tasks(filter_activity, filter_project, task_status):
                         st.write("✅")
                 
                 with cols[3]:
-                    if st.button("🗑️", key=f"delete_{task['name']}_{task['project']}"):
+                    if st.button("🗑️", key=f"delete_{i}_{task['name']}_{task['project']}"):  # Clave única con índice
                         if task['completed']:
                             state['completed_tasks'].remove(task)
                         else:
                             state['tasks'].remove(task)
                         st.success("Tarea eliminada!")
                         st.rerun()
-
 # ==============================================
 # Pestaña de Temporizador
 # ==============================================
@@ -1300,3 +1286,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
