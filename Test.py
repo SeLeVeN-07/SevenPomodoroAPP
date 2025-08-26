@@ -1,15 +1,3 @@
-Basado en los problemas identificados, voy a corregir el código de la aplicación Pomodoro Pro para solucionar:
-
-1. La pérdida de configuración al recargar
-2. Los problemas de navegación durante el Pomodoro
-
-Aquí están las correcciones principales:
-
-```python
-# -*- coding: utf-8 -*-
-"""
-Pomodoro Pro - Versión Mejorada con Soporte para Nombre de Usuario
-"""
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -412,4 +400,179 @@ def handle_phase_completion(state):
             state['timer_paused'] = False
             st.rerun()
     
-    state['current_phase'] = determine_next_phase(was
+    state['current_phase'] = determine_next_phase(was_work)
+    state['remaining_time'] = get_phase_duration(state['current_phase'])
+    state['total_active_time'] = 0
+    
+    # Mostrar notificación adecuada según el tipo de fase completada
+    if was_work:
+        st.toast("¡Pomodoro completado! Tómate un descanso.", icon="🎉")
+    else:
+        st.toast("¡Descanso completado! Volvamos al trabajo.", icon="💪")
+    
+    st.success(f"¡Fase completada! Iniciando: {state['current_phase']}")
+    st.rerun()
+
+def determine_next_phase(was_work):
+    """Determina la siguiente fase basada en el estado actual"""
+    state = st.session_state.pomodoro_state
+    if not was_work:
+        return "Trabajo"
+    
+    # Calcular descanso según contador de sesiones
+    if state['session_count'] % state['sessions_before_long'] == 0:
+        return "Descanso Largo"
+    return "Descanso Corto"
+
+def get_phase_duration(phase):
+    """Obtiene la duración de la fase actual"""
+    state = st.session_state.pomodoro_state
+    if phase == "Trabajo":
+        return state['work_duration']
+    elif phase == "Descanso Corto":
+        return state['short_break']
+    elif phase == "Descanso Largo":
+        return state['long_break']
+    else:
+        return state['work_duration']  # Valor por defecto
+
+def log_session():
+    """Registra la sesión completada en el historial"""
+    state = st.session_state.pomodoro_state
+    if state['total_active_time'] >= 0.1:
+        minutes = round(state['total_active_time'] / 60, 2)
+        log_entry = {
+            'Fecha': datetime.datetime.now().date().isoformat(),
+            'Hora Inicio': (state['start_time'] or datetime.datetime.now()).strftime("%H:%M:%S"),
+            'Tiempo Activo (min)': minutes,
+            'Actividad': state['current_activity'],
+            'Proyecto': state['current_project'],
+            'Tarea': state.get('current_task', '')
+        }
+        
+        # Guardar en el historial de sesiones
+        state['session_history'].append(log_entry)
+        
+        # Limitar el tamaño del historial
+        if len(state['session_history']) > 1000:
+            state['session_history'] = state['session_history'][-1000:]
+        
+        # Actualizar logros
+        update_achievements(state, minutes)
+        
+        # Guardar cambios
+        save_user_data()
+
+def update_achievements(state, minutes):
+    """Actualiza los logros del usuario"""
+    if state['current_phase'] == "Trabajo":
+        state['achievements']['pomodoros_completed'] += 1
+        state['achievements']['total_hours'] += minutes / 60
+        
+        # Verificar racha diaria
+        today = date.today()
+        if state['last_session_date'] != today:
+            if state['last_session_date'] and (today - state['last_session_date']).days == 1:
+                state['achievements']['streak_days'] += 1
+            elif not state['last_session_date']:
+                state['achievements']['streak_days'] = 1
+            else:
+                state['achievements']['streak_days'] = 1
+            state['last_session_date'] = today
+
+# ==============================================
+# Función principal mejorada
+# ==============================================
+
+def main():
+    # Inicialización del estado con persistencia mejorada
+    if 'pomodoro_state' not in st.session_state:
+        # Cargar datos del usuario si está autenticado
+        if 'user' in st.session_state and st.session_state.user:
+            user_data = load_user_data()
+            if user_data:
+                st.session_state.pomodoro_state = user_data
+            else:
+                st.session_state.pomodoro_state = get_default_state()
+                
+            # Cargar perfil de usuario
+            user_profile = load_user_profile()
+            if user_profile:
+                st.session_state.pomodoro_state['username'] = user_profile.get('username', '')
+                st.session_state.pomodoro_state['display_name'] = user_profile.get('display_name', '')
+        else:
+            st.session_state.pomodoro_state = get_default_state()
+    
+    # Configurar manejo de eventos antes de renderizar la interfaz
+    setup_event_handlers()
+    
+    # Barra lateral
+    sidebar()
+    
+    # Solo mostrar la aplicación si el usuario está autenticado
+    if 'user' in st.session_state and st.session_state.user:
+        # Guardar automáticamente cada 30 segundos
+        auto_save()
+        
+        # Crear backup local periódicamente
+        if 'last_backup' not in st.session_state or \
+           (datetime.datetime.now() - st.session_state.last_backup).seconds > 300:
+            backup_local_data()
+            st.session_state.last_backup = datetime.datetime.now()
+        
+        # Obtener la pestaña seleccionada
+        selected_tab = st.session_state.get('sidebar_nav', "🍅 Temporizador")
+
+        # Mostrar la pestaña correspondiente
+        if selected_tab == "🍅 Temporizador":
+            timer_tab()
+        elif selected_tab == "📊 Estadísticas":
+            stats_tab()
+        elif selected_tab == "📋 Tareas":
+            tasks_tab()
+        elif selected_tab == "🏆 Logros":
+            show_achievements()
+        elif selected_tab == "⚙️ Configuración":
+            settings_tab()
+        elif selected_tab == "ℹ️ Info":
+            show_info_tabs()
+    else:
+        show_welcome_message()
+
+def setup_event_handlers():
+    """Configura manejadores de eventos para prevenir comportamientos no deseados"""
+    # Esto es un placeholder para la lógica que en un frontend real manejaría los eventos
+    # En Streamlit, gran parte de esto se maneja a través del estado de la sesión
+    pass
+
+def show_info_tabs():
+    """Muestra las pestañas de información"""
+    tab1, tab2 = st.tabs(["Acerca de", "Información y Ayuda"])
+    with tab1:
+        about_tab()
+    with tab2:
+        info_tab()
+
+def show_welcome_message():
+    """Muestra mensaje de bienvenida para usuarios no autenticados"""
+    st.title("🍅 Pomodoro Pro")
+    st.markdown("""
+    ### Bienvenido a Pomodoro Pro
+    
+    Para comenzar a usar la aplicación, por favor:
+    1. Crea una cuenta o inicia sesión en la barra lateral
+    2. Personaliza tu perfil con nombre de usuario
+    3. Tus datos se guardarán automáticamente en la nube
+    4. Podrás acceder a tu información desde cualquier dispositivo
+    
+    **Características principales:**
+    - Temporizador Pomodoro configurable
+    - Gestión de tareas y proyectos
+    - Seguimiento de productividad
+    - Estadísticas detalladas
+    - Almacenamiento en la nube
+    - Perfiles de usuario personalizables
+    """)
+
+if __name__ == "__main__":
+    main()
