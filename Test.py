@@ -507,7 +507,10 @@ def main():
     setup_event_handlers()
     
     # Barra lateral
-    def sidebar():
+    El error principal es que hay una llamada redundante a `sidebar()` dentro de su propia definición, lo que causaría una recursión infinita. Aquí está la versión corregida:
+
+```python
+def sidebar():
     # Sección de autenticación
     auth_section()
     
@@ -524,7 +527,7 @@ def main():
         # Navegación
         st.sidebar.radio(
             "Navegación",
-            ["🍅 Temporizador", "📋 Tareas", "📊 Estadísticas", "⚙️ Configuración"],
+            ["🍅 Temporizador", "📋 Tareas", "📊 Estadísticas", "⚙️ Configuración", "ℹ️ Info"],
             key='sidebar_nav'
         )
 
@@ -532,7 +535,13 @@ def main():
             supabase.auth.sign_out()
             st.session_state.clear()
             st.rerun()
-            
+
+def main():
+    # Inicialización del estado
+    if 'pomodoro_state' not in st.session_state:
+        st.session_state.pomodoro_state = get_default_state()
+    
+    # Barra lateral
     sidebar()
     
     # Solo mostrar la aplicación si el usuario está autenticado
