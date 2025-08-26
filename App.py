@@ -69,11 +69,11 @@ THEMES = {
 # Inicialización del estado de la sesión
 if 'pomodoro_state' not in st.session_state:
     st.session_state.pomodoro_state = {
-        'work_duration': 25 * 60,
-        'short_break': 5 * 60,
-        'long_break': 15 * 60,
-        'sessions_before_long': 4,
-        'total_sessions': 8,
+        'work_duration': 45 * 60,
+        'short_break': 20 * 60,
+        'long_break': 30 * 60,
+        'sessions_before_long': 2,
+        'total_sessions': 4,
         'session_count': 0,
         'remaining_time': 25 * 60,
         'current_phase': "Trabajo",
@@ -1286,4 +1286,5 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
