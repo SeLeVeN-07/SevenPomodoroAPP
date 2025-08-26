@@ -82,6 +82,21 @@ THEMES = {
     }
 }
 
+# Función auxiliar para obtener color de fase
+def get_phase_color(phase):
+    colors = {
+        "Trabajo": '#e74c3c',
+        'Descanso Corto': '#2ecc71',
+        'Descanso Largo': '#3498db'
+    }
+    return colors.get(phase, "#e74c3c")
+
+# Función auxiliar para formatear tiempo
+def format_time(seconds):
+    mins = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{mins:02d}:{secs:02d}"
+
 # Estado por defecto
 def get_default_state():
     if 'pomodoro_state' in st.session_state:
@@ -211,132 +226,119 @@ def load_user_data():
 def timer_tab():
     state = st.session_state.pomodoro_state
     
-    with st.form(key='timer_form'):
-        if state['study_mode'] and state['current_activity']:
-            st.header(f"Actividad: {state['current_activity']}")
+    # Mostrar materia actual si está en modo estudio
+    if state['study_mode'] and state['current_activity']:
+        st.header(f"Actividad: {state['current_activity']}")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if not state['activities']:
-                st.warning("No hay actividades disponibles. Agrega actividades en la pestaña de Configuración")
-                state['current_activity'] = ""
-            else:
-                state['current_activity'] = st.selectbox(
-                    "Actividad",
-                    state['activities'],
-                    key="current_activity"
-                )
-
-        with col2:
-            state['sub_activity'] = ""
-
-        theme = THEMES[state['current_theme']]
-        phase_duration = get_phase_duration(state['current_phase'])
-        progress = 1 - (state['remaining_time'] / phase_duration) if phase_duration > 0 else 0
-
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=state['remaining_time'],
-            number={'suffix': "s", 'font': {'size': 40}},
-            gauge={
-                'axis': {'range': [0, phase_duration], 'visible': False},
-                'bar': {'color': get_phase_color(state['current_phase'])},
-                'steps': [
-                    {'range': [0, phase_duration], 'color': theme['circle_bg']}
-                ]
-            },
-            domain={'x': [0, 1], 'y': [0, 1]},
-            title={'text': f"{state['current_phase']} - {format_time(state['remaining_time'])}", 'font': {'size': 24}}
-        ))
-
-        fig.update_layout(
-            height=300,
-            margin=dict(l=10, r=10, t=80, b=10),
-            paper_bgcolor=theme['bg'],
-            font={'color': theme['text']}
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            start_pause = st.form_submit_button(
-                "▶️ Iniciar" if not state['timer_running'] else "▶️ Reanudar",
-                use_container_width=True,
-                type="primary"
+    # Selector de actividad
+    col1, col2 = st.columns(2)
+    with col1:
+        if not state['activities']:
+            st.warning("No hay actividades disponibles. Agrega actividades en la pestaña de Configuración")
+            state['current_activity'] = ""
+        else:
+            state['current_activity'] = st.selectbox(
+                "Actividad",
+                state['activities'],
+                key="current_activity"
             )
 
-        with col2:
-            if state['timer_running']:
-                pause_resume = st.form_submit_button(
-                    "⏸️ Pausar" if not state['timer_paused'] else "▶️ Reanudar",
-                    use_container_width=True
-                )
-            else:
-                st.form_submit_button("⏸️ Pausar", disabled=True, use_container_width=True)
+    with col2:
+        state['sub_activity'] = ""
 
-        with col3:
-            skip = st.form_submit_button("⏭️ Saltar Fase", use_container_width=True)
+    # Visualización del temporizador
+    theme = THEMES[state['current_theme']]
 
-        st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
+    # Crear un círculo de progreso con Plotly
+    phase_duration = get_phase_duration(state['current_phase'])
+    progress = 1 - (state['remaining_time'] / phase_duration) if phase_duration > 0 else 0
 
-    if start_pause:
-        handle_timer_start(state)
-    elif 'pause_resume' in locals() and pause_resume:
-        handle_timer_pause(state)
-    elif skip:
-        handle_skip_phase(state)
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = state['remaining_time'],
+        number = {'suffix': "s", 'font': {'size': 40}},
+        gauge = {
+            'axis': {'range': [0, phase_duration], 'visible': False},
+            'bar': {'color': get_phase_color(state['current_phase'])},
+            'steps': [
+                {'range': [0, phase_duration], 'color': theme['circle_bg']}
+            ]
+        },
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': f"{state['current_phase']} - {format_time(state['remaining_time'])}", 'font': {'size': 24}}
+    ))
 
-    update_timer(state)
+    fig.update_layout(
+        height=300,
+        margin=dict(l=10, r=10, t=80, b=10),
+        paper_bgcolor=theme['bg'],
+        font={'color': theme['text']}
+    )
 
-def handle_timer_start(state):
-    if not state['timer_running']:
-        state['timer_running'] = True
-        state['timer_paused'] = False
-        state['start_time'] = datetime.datetime.now()
-        state['total_active_time'] = 0
-        state['timer_start'] = time.monotonic()
-        state['last_update'] = time.monotonic()
-        st.rerun()
+    st.plotly_chart(fig, use_container_width=True)
 
-def handle_timer_pause(state):
-    if state['timer_running'] and not state['timer_paused']:
-        state['timer_paused'] = True
-        state['paused_time'] = time.monotonic()
-        st.rerun()
-    elif state['timer_paused']:
-        state['timer_paused'] = False
-        pause_duration = time.monotonic() - state['paused_time']
-        state['timer_start'] += pause_duration
-        state['last_update'] = time.monotonic()
-        st.rerun()
+    # Controles del temporizador - SIN FORM
+    col1, col2, col3 = st.columns(3)
 
-def handle_skip_phase(state):
-    was_work = state['current_phase'] == "Trabajo"
+    with col1:
+        if st.button("▶️ Iniciar" if not state['timer_running'] else "▶️ Reanudar",
+                   use_container_width=True, type="primary", key="start_timer"):
+            if not state['timer_running']:
+                state['timer_running'] = True
+                state['timer_paused'] = False
+                state['start_time'] = datetime.datetime.now()
+                state['total_active_time'] = 0
+                # Iniciar el temporizador
+                state['timer_start'] = time.monotonic()
+                state['last_update'] = time.monotonic()
+                st.rerun()
 
-    if was_work:
-        state['session_count'] += 1
-        if state['total_active_time'] >= 0.1:
-            log_session()
-        
-        if state['session_count'] >= state['total_sessions']:
-            st.success("¡Todas las sesiones completadas!")
-            state['session_count'] = 0
-            state['current_phase'] = "Trabajo"
-            state['remaining_time'] = state['work_duration']
+    with col2:
+        if st.button("⏸️ Pausar" if state['timer_running'] and not state['timer_paused'] else "▶️ Reanudar",
+                   use_container_width=True, disabled=not state['timer_running'], key="pause_timer"):
+            if state['timer_running'] and not state['timer_paused']:
+                state['timer_paused'] = True
+                state['paused_time'] = time.monotonic()
+                st.rerun()
+            elif state['timer_paused']:
+                state['timer_paused'] = False
+                # Ajustar el tiempo de inicio para compensar la pausa
+                pause_duration = time.monotonic() - state['paused_time']
+                state['timer_start'] += pause_duration
+                state['last_update'] = time.monotonic()
+                st.rerun()
+
+    with col3:
+        if st.button("⏭️ Saltar Fase", use_container_width=True, key="skip_phase"):
+            was_work = state['current_phase'] == "Trabajo"
+
+            # Lógica para sesiones de trabajo
+            if was_work:
+                state['session_count'] += 1
+                if state['total_active_time'] >= 0.1:
+                    log_session()
+                
+                if state['session_count'] >= state['total_sessions']:
+                    st.success("¡Todas las sesiones completadas!")
+                    state['session_count'] = 0
+                    state['current_phase'] = "Trabajo"
+                    state['remaining_time'] = state['work_duration']
+                    state['timer_running'] = False
+                    state['timer_paused'] = False
+                    st.rerun()
+            
+            # Determinar siguiente fase
+            state['current_phase'] = determine_next_phase(was_work)
+            state['remaining_time'] = get_phase_duration(state['current_phase'])
+            state['total_active_time'] = 0
             state['timer_running'] = False
             state['timer_paused'] = False
             st.rerun()
-    
-    state['current_phase'] = determine_next_phase(was_work)
-    state['remaining_time'] = get_phase_duration(state['current_phase'])
-    state['total_active_time'] = 0
-    state['timer_running'] = False
-    state['timer_paused'] = False
-    st.rerun()
 
-def update_timer(state):
+    # Contador de sesiones
+    st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
+
+    # Actualizar el temporizador si está en ejecución
     if state['timer_running'] and not state['timer_paused']:
         current_time = time.monotonic()
         elapsed = current_time - state['last_update']
@@ -346,35 +348,39 @@ def update_timer(state):
         state['total_active_time'] += elapsed
 
         if state['remaining_time'] <= 0:
-            handle_phase_completion(state)
-
-def handle_phase_completion(state):
-    was_work = state['current_phase'] == "Trabajo"
-    
-    if was_work:
-        if state['total_active_time'] >= 0.1:
-            log_session()
-        state['session_count'] += 1
-        
-        if state['session_count'] >= state['total_sessions']:
-            st.success("¡Todas las sesiones completadas!")
-            state['session_count'] = 0
-            state['current_phase'] = "Trabajo"
-            state['remaining_time'] = state['work_duration']
-            state['timer_running'] = False
-            state['timer_paused'] = False
+            # Fase completada
+            was_work = state['current_phase'] == "Trabajo"
+            
+            if was_work:
+                if state['total_active_time'] >= 0.1:
+                    log_session()
+                state['session_count'] += 1
+                
+                if state['session_count'] >= state['total_sessions']:
+                    st.success("¡Todas las sesiones completadas!")
+                    state['session_count'] = 0
+                    state['current_phase'] = "Trabajo"
+                    state['remaining_time'] = state['work_duration']
+                    state['timer_running'] = False
+                    state['timer_paused'] = False
+                    st.rerun()
+            
+            # Determinar siguiente fase
+            state['current_phase'] = determine_next_phase(was_work)
+            state['remaining_time'] = get_phase_duration(state['current_phase'])
+            state['total_active_time'] = 0
+            st.success(f"¡Fase completada! Iniciando: {state['current_phase']}")
+            
+            # Mostrar notificación toast
+            if was_work:
+                st.toast("¡Pomodoro completado! Tómate un descanso.", icon="🎉")
+            else:
+                st.toast("¡Descanso completado! Volvamos al trabajo.", icon="💪")
+            
             st.rerun()
-    
-    state['current_phase'] = determine_next_phase(was_work)
-    state['remaining_time'] = get_phase_duration(state['current_phase'])
-    state['total_active_time'] = 0
-    
-    if was_work:
-        st.toast("¡Pomodoro completado! Tómate un descanso.", icon="🎉")
-    else:
-        st.toast("¡Descanso completado! Volvamos al trabajo.", icon="💪")
-    
-    st.success(f"¡Fase completada! Iniciando: {state['current_phase']}")
+
+    # Forzar actualización de la interfaz
+    time.sleep(0.1)
     st.rerun()
 
 def determine_next_phase(was_work):
@@ -382,6 +388,7 @@ def determine_next_phase(was_work):
     if not was_work:
         return "Trabajo"
     
+    # Calcular descanso según contador de sesiones
     if state['session_count'] % state['sessions_before_long'] == 0:
         return "Descanso Largo"
     return "Descanso Corto"
@@ -395,14 +402,14 @@ def get_phase_duration(phase):
     elif phase == "Descanso Largo":
         return state['long_break']
     else:
-        return state['work_duration']
+        return state['work_duration']  # Valor por defecto
 
 def log_session():
     state = st.session_state.pomodoro_state
     if state['total_active_time'] >= 0.1:
         minutes = round(state['total_active_time'] / 60, 2)
         log_entry = {
-            'Fecha': datetime.datetime.now().date().isoformat(),
+            'Fecha': datetime.datetime.now().date().isoformat(),  # Convertir a string
             'Hora Inicio': (state['start_time'] or datetime.datetime.now()).strftime("%H:%M:%S"),
             'Tiempo Activo (min)': minutes,
             'Actividad': state['current_activity'],
@@ -410,28 +417,31 @@ def log_session():
             'Tarea': state.get('current_task', '')
         }
         
+        # Guardar en el historial de sesiones
         state['session_history'].append(log_entry)
         
+        # Limitar el tamaño del historial
         if len(state['session_history']) > 1000:
             state['session_history'] = state['session_history'][-1000:]
         
-        update_achievements(state, minutes)
-        save_user_data()
-
-def update_achievements(state, minutes):
-    if state['current_phase'] == "Trabajo":
-        state['achievements']['pomodoros_completed'] += 1
-        state['achievements']['total_hours'] += minutes / 60
+        # Actualizar logros
+        if state['current_phase'] == "Trabajo":
+            state['achievements']['pomodoros_completed'] += 1
+            state['achievements']['total_hours'] += minutes / 60
+            
+            # Verificar racha diaria
+            today = date.today()
+            if state['last_session_date'] != today:
+                if state['last_session_date'] and (today - state['last_session_date']).days == 1:
+                    state['achievements']['streak_days'] += 1
+                elif not state['last_session_date']:
+                    state['achievements']['streak_days'] = 1
+                else:
+                    state['achievements']['streak_days'] = 1
+                state['last_session_date'] = today
         
-        today = date.today()
-        if state['last_session_date'] != today:
-            if state['last_session_date'] and (today - state['last_session_date']).days == 1:
-                state['achievements']['streak_days'] += 1
-            elif not state['last_session_date']:
-                state['achievements']['streak_days'] = 1
-            else:
-                state['achievements']['streak_days'] = 1
-            state['last_session_date'] = today
+        # Guardar cambios
+        save_user_data()
 
 # Funciones de autenticación
 def auth_section():
@@ -446,7 +456,8 @@ def auth_section():
                 email = st.text_input("Correo electrónico")
                 password = st.text_input("Contraseña", type="password")
                 
-                if st.form_submit_button("Ingresar"):
+                submit_login = st.form_submit_button("Ingresar")
+                if submit_login:
                     if not email or not password:
                         st.error("Por favor completa todos los campos")
                     else:
@@ -468,7 +479,8 @@ def auth_section():
                 username = st.text_input("Nombre de usuario")
                 display_name = st.text_input("Nombre para mostrar (opcional)")
                 
-                if st.form_submit_button("Crear cuenta"):
+                submit_signup = st.form_submit_button("Crear cuenta")
+                if submit_signup:
                     if not new_email or not new_password or not confirm_password or not username:
                         st.error("Por favor completa todos los campos obligatorios")
                     elif new_password != confirm_password:
