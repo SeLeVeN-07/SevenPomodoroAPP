@@ -143,7 +143,32 @@ def validate_state(state):
         logger.warning("Estado inválido - reinicializando a valores por defecto")
         return default_state
     
-    # 2. Validar actividades
+    # 2. Asegurar que todas las estructuras de datos existan
+    state.setdefault('projects', [])
+    state.setdefault('activities', [])
+    state.setdefault('tasks', [])
+    
+    # 3. Validar y reparar proyectos
+    valid_projects = []
+    for project in state.get('projects', []):
+        if isinstance(project, dict) and project.get('name'):
+            # Asegurar que tenga ID
+            if 'id' not in project or not project['id']:
+                project['id'] = str(uuid.uuid4())
+            valid_projects.append(project)
+    state['projects'] = valid_projects
+    
+    # 4. Validar y reparar tareas
+    valid_tasks = []
+    for task in state.get('tasks', []):
+        if isinstance(task, dict) and task.get('name'):
+            # Asegurar que tenga ID
+            if 'id' not in task or not task['id']:
+                task['id'] = str(uuid.uuid4())
+            valid_tasks.append(task)
+    state['tasks'] = valid_tasks
+    
+    # 5. Validar actividades
     if 'activities' not in state or not isinstance(state['activities'], list):
         state['activities'] = default_state['activities']
         logger.warning("Actividades no válidas - restablecido a valores por defecto")
@@ -169,7 +194,7 @@ def validate_state(state):
             if state['current_activity'] not in state['activities']:
                 state['current_activity'] = state['activities'][0] if state['activities'] else ""
     
-    # 3. Validar configuración del temporizador
+    # 6. Validar configuración del temporizador
     timer_settings = [
         ('work_duration', 25*60, 5*60, 120*60),  # (nombre, default, min, max)
         ('short_break', 5*60, 1*60, 30*60),
@@ -185,11 +210,11 @@ def validate_state(state):
             state[setting] = default_val
             logger.warning(f"Configuración inválida '{setting}' - restaurada a valor por defecto")
     
-    # 4. Validar fase actual
+    # 7. Validar fase actual
     if 'current_phase' not in state or state['current_phase'] not in ['Trabajo', 'Descanso Corto', 'Descanso Largo']:
         state['current_phase'] = 'Trabajo'
     
-    # 5. Validar contadores y estadísticas
+    # 8. Validar contadores y estadísticas
     counters = [
         'session_count', 'task_id_counter', 
         'total_active_time', 'remaining_time'
@@ -198,7 +223,7 @@ def validate_state(state):
         if counter not in state or not isinstance(state[counter], (int, float)):
             state[counter] = default_state.get(counter, 0)
     
-    # 6. Validar logros
+    # 9. Validar logros
     if 'achievements' not in state or not isinstance(state['achievements'], dict):
         state['achievements'] = default_state['achievements']
     else:
@@ -206,7 +231,7 @@ def validate_state(state):
             if key not in state['achievements'] or not isinstance(state['achievements'][key], (int, float)):
                 state['achievements'][key] = default_state['achievements'][key]
     
-    # 7. Validar fechas importantes
+    # 10. Validar fechas importantes
     date_fields = ['last_session_date', 'start_time', 'paused_time', 'timer_start', 'last_update']
     for field in date_fields:
         if field in state and state[field]:
@@ -218,11 +243,11 @@ def validate_state(state):
             except ValueError:
                 state[field] = None
     
-    # 8. Validar tema
+    # 11. Validar tema
     if 'current_theme' not in state or state['current_theme'] not in THEMES:
         state['current_theme'] = 'Claro'
     
-    # 9. Actualizar versión de datos
+    # 12. Actualizar versión de datos
     state['data_version'] = default_state['data_version']
     
     return state
@@ -378,19 +403,31 @@ def load_user_data():
         ).execute()
 
         if not response.data:
-            return None  # No hay datos guardados aún
+            return None
             
         data = response.data[0]['pomodoro_data']
         
-        # Solo validar datos esenciales
+        # Validar y reparar datos
         if not isinstance(data, dict):
             raise ValueError("Formato de datos inválido")
             
+        # Asegurar que todas las estructuras de datos existan
+        data.setdefault('projects', [])
+        data.setdefault('activities', [])
+        data.setdefault('tasks', [])
+        
+        # Reparar relaciones entre proyectos y tareas
+        project_id_map = {p['id']: p for p in data.get('projects', [])}
+        
+        for task in data.get('tasks', []):
+            # Si la tarea tiene un proyecto pero el proyecto no existe, limpiar la referencia
+            if task.get('project') and task['project'] not in project_id_map:
+                task['project'] = ""
+                
         return data
         
     except Exception as e:
-        logger.error(f"Error parcial al cargar datos: {str(e)}")
-        # Retorna None para que main() use valores por defecto
+        logger.error(f"Error al cargar datos: {str(e)}")
         return None
         
 def save_user_data():
@@ -409,7 +446,14 @@ def save_user_data():
         # 1. Validar y preparar el estado
         state_to_save = validate_state(st.session_state.pomodoro_state.copy())
         
-        # 2. Serialización robusta de datos
+        # 2. Asegurar la integridad de los datos
+        # - Verificar que todas las tareas tengan referencias válidas a proyectos
+        project_ids = [p['id'] for p in state_to_save.get('projects', [])]
+        for task in state_to_save.get('tasks', []):
+            if task.get('project') and task['project'] not in project_ids:
+                task['project'] = ""
+        
+        # 3. Serialización robusta de datos
         def serialize_datetime(obj):
             """Función recursiva para serializar objetos datetime"""
             if isinstance(obj, (datetime.datetime, datetime.date)):
@@ -422,7 +466,7 @@ def save_user_data():
 
         serialized_data = serialize_datetime(state_to_save)
         
-        # 3. Verificar y preparar user_id
+        # 4. Verificar y preparar user_id
         try:
             user_id = str(st.session_state.user.user.id)
             # Validar formato UUID si es necesario
@@ -435,7 +479,7 @@ def save_user_data():
             logger.error(f"Error al procesar user_id: {str(e)}")
             return False
 
-        # 4. Preparar datos para Supabase
+        # 5. Preparar datos para Supabase
         data_to_save = {
             'user_id': user_id,
             'email': getattr(st.session_state.user.user, 'email', ''),
@@ -445,7 +489,7 @@ def save_user_data():
         
         logger.debug(f"Preparado para guardar: {data_to_save}")
 
-        # 5. Intento de guardado con reintentos
+        # 6. Intento de guardado con reintentos
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -498,14 +542,22 @@ def load_user_profile():
             response = supabase.table('user_profiles').select('*').eq('user_id', user_id).execute()
             
             if response.data:
-                return response.data[0]
+                profile = response.data[0]
+                # Asegurar que el perfil tenga email
+                if 'email' not in profile or not profile['email']:
+                    # Actualizar el perfil con el email de autenticación
+                    supabase.table('user_profiles').update({
+                        'email': email
+                    }).eq('user_id', user_id).execute()
+                    profile['email'] = email
+                return profile
             else:
                 # Crear nuevo perfil si no existe
                 new_profile = {
                     'user_id': user_id,
                     'email': email,  # Obligatorio
                     'username': f"user_{user_id[:8]}",
-                    'display_name': email.split('@')[0],
+                    'display_name': email.split('@')[0] if email else f"user_{user_id[:8]}",
                     'created_at': datetime.datetime.now().isoformat()
                 }
                 
@@ -556,7 +608,6 @@ def update_user_profile(username, display_name):
     else:
         st.error("No hay usuario autenticado")
         return False
-
 def auto_save():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
@@ -705,6 +756,78 @@ def generate_task_id(state):
     """Genera un ID único para tareas usando UUID"""
     return str(uuid.uuid4())
 
+def add_project(state, name):
+    """
+    Añade un nuevo proyecto con validación
+    """
+    try:
+        if not name or not isinstance(name, str) or len(name.strip()) < 3:
+            raise ValueError("Nombre de proyecto no válido")
+            
+        # Verificar si el proyecto ya existe
+        if any(p['name'].lower() == name.strip().lower() for p in state['projects']):
+            raise ValueError("El proyecto ya existe")
+            
+        project = {
+            'id': str(uuid.uuid4()),
+            'name': name.strip(),
+            'created_at': datetime.datetime.now().isoformat(),
+            'task_count': 0
+        }
+        
+        state['projects'].append(project)
+        st.session_state['force_save'] = True
+        
+        # Guardar inmediatamente después de agregar
+        if save_user_data():
+            logger.info(f"Proyecto añadido: {project['name']}")
+            return project
+        else:
+            st.error("Error al guardar el proyecto")
+            return None
+        
+    except Exception as e:
+        logger.error(f"Error al agregar proyecto: {str(e)}")
+        st.error(f"No se pudo agregar el proyecto: {str(e)}")
+        return None
+
+def add_activity(activity_name):
+    try:
+        if 'pomodoro_state' not in st.session_state:
+            st.error("Estado Pomodoro no inicializado")
+            return False
+            
+        if not activity_name or not isinstance(activity_name, str):
+            st.error("Nombre de actividad no válido")
+            return False
+            
+        # Limpiar y estandarizar el nombre
+        clean_name = activity_name.strip()
+        
+        # Verificar si la actividad ya existe (case insensitive)
+        existing_activities = [act.lower() for act in st.session_state.pomodoro_state['activities']]
+        if clean_name.lower() in existing_activities:
+            st.warning(f"La actividad '{clean_name}' ya existe")
+            return True
+            
+        # Agregar la nueva actividad
+        st.session_state.pomodoro_state['activities'].append(clean_name)
+        
+        # Guardar inmediatamente
+        if save_user_data():
+            st.success(f"Actividad '{clean_name}' agregada correctamente")
+            logger.info("Actividad guardada exitosamente en Supabase")
+            return True
+        else:
+            st.error("Error al guardar los cambios")
+            return False
+            
+    except Exception as e:
+        error_msg = f"Error al agregar actividad: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        st.error("Error técnico al agregar actividad. Verifica los logs.")
+        return False
+
 def add_task(state, name, description="", priority="Media", due_date=None, project=""):
     """
     Añade una nueva tarea al estado con verificación de datos
@@ -713,13 +836,25 @@ def add_task(state, name, description="", priority="Media", due_date=None, proje
         if not name or not isinstance(name, str):
             raise ValueError("Nombre de tarea no válido")
             
+        # Convertir el nombre del proyecto a ID si es necesario
+        project_id = ""
+        if project:
+            # Buscar el proyecto por nombre
+            for p in state['projects']:
+                if p['name'] == project:
+                    project_id = p['id']
+                    break
+            # Si no se encuentra, usar el valor directamente (asumiendo que es un ID)
+            if not project_id and project:
+                project_id = project
+        
         task = {
             'id': generate_task_id(state),
             'name': name.strip(),
             'description': description.strip() if description else "",
             'priority': priority if priority in ["Baja", "Media", "Alta"] else "Media",
             'due_date': due_date if isinstance(due_date, (datetime.date, type(None))) else None,
-            'project': project if project in [p['id'] for p in state['projects']] else "",
+            'project': project_id,  # Usar el ID del proyecto, no el nombre
             'completed': False,
             'created_at': datetime.datetime.now().isoformat(),
             'completed_at': None
@@ -727,8 +862,14 @@ def add_task(state, name, description="", priority="Media", due_date=None, proje
         
         state['tasks'].append(task)
         st.session_state['force_save'] = True
-        logger.info(f"Tarea añadida: {task['name']}")
-        return task
+        
+        # Guardar inmediatamente
+        if save_user_data():
+            logger.info(f"Tarea añadida: {task['name']}")
+            return task
+        else:
+            st.error("Error al guardar la tarea")
+            return None
         
     except Exception as e:
         logger.error(f"Error al agregar tarea: {str(e)}")
@@ -758,7 +899,19 @@ def update_task(state, task_id, **kwargs):
             task['due_date'] = kwargs['due_date'] if isinstance(kwargs['due_date'], (datetime.date, type(None))) else task['due_date']
             
         if 'project' in kwargs:
-            task['project'] = kwargs['project'] if kwargs['project'] in [p['id'] for p in state['projects']] else task['project']
+            # Convertir nombre de proyecto a ID si es necesario
+            project_value = kwargs['project']
+            if project_value and isinstance(project_value, str):
+                # Buscar el proyecto por nombre
+                project_id = ""
+                for p in state['projects']:
+                    if p['name'] == project_value:
+                        project_id = p['id']
+                        break
+                # Si no se encuentra, usar el valor directamente (asumiendo que es un ID)
+                task['project'] = project_id if project_id else project_value
+            else:
+                task['project'] = project_value
             
         if 'completed' in kwargs:
             task['completed'] = bool(kwargs['completed'])
@@ -767,8 +920,14 @@ def update_task(state, task_id, **kwargs):
                 state['achievements']['tasks_completed'] += 1
         
         st.session_state['force_save'] = True
-        logger.info(f"Tarea actualizada: {task['name']}")
-        return True
+        
+        # Guardar inmediatamente
+        if save_user_data():
+            logger.info(f"Tarea actualizada: {task['name']}")
+            return True
+        else:
+            st.error("Error al guardar los cambios")
+            return False
         
     except Exception as e:
         logger.error(f"Error al actualizar tarea: {str(e)}")
@@ -792,34 +951,7 @@ def delete_task(state, task_id):
         logger.error(f"Error al eliminar tarea: {str(e)}")
         return False
 
-def add_project(state, name):
-    """
-    Añade un nuevo proyecto con validación
-    """
-    try:
-        if not name or not isinstance(name, str) or len(name.strip()) < 3:
-            raise ValueError("Nombre de proyecto no válido")
-            
-        # Verificar si el proyecto ya existe
-        if any(p['name'].lower() == name.strip().lower() for p in state['projects']):
-            raise ValueError("El proyecto ya existe")
-            
-        project = {
-            'id': str(uuid.uuid4()),
-            'name': name.strip(),
-            'created_at': datetime.datetime.now().isoformat(),
-            'task_count': 0
-        }
-        
-        state['projects'].append(project)
-        st.session_state['force_save'] = True
-        logger.info(f"Proyecto añadido: {project['name']}")
-        return project
-        
-    except Exception as e:
-        logger.error(f"Error al agregar proyecto: {str(e)}")
-        st.error(f"No se pudo agregar el proyecto: {str(e)}")
-        return None
+
 
 def update_project(state, project_id, new_name):
     """
@@ -882,47 +1014,6 @@ def delete_project(state, project_id):
         st.error("Error al eliminar proyecto")
         return False
 
-def add_activity(activity_name):
-    try:
-        if 'pomodoro_state' not in st.session_state:
-            st.error("Estado Pomodoro no inicializado")
-            return False
-            
-        if not activity_name or not isinstance(activity_name, str):
-            st.error("Nombre de actividad no válido")
-            return False
-            
-        # Limpiar y estandarizar el nombre
-        clean_name = activity_name.strip()
-        
-        # Verificar si la actividad ya existe (case insensitive)
-        existing_activities = [act.lower() for act in st.session_state.pomodoro_state['activities']]
-        if clean_name.lower() in existing_activities:
-            st.warning(f"La actividad '{clean_name}' ya existe")
-            return True
-            
-        # Agregar la nueva actividad
-        st.session_state.pomodoro_state['activities'].append(clean_name)
-        
-        # Debug detallado
-        logger.info(f"Antes de guardar - Actividades: {st.session_state.pomodoro_state['activities']}")
-        logger.info(f"Estado completo: {st.session_state.pomodoro_state}")
-        
-        # Forzar guardado con verificación
-        if save_user_data():
-            st.success(f"Actividad '{clean_name}' agregada correctamente")
-            logger.info("Actividad guardada exitosamente en Supabase")
-            return True
-        else:
-            st.error("Error al guardar los cambios")
-            logger.error("Fallo en save_user_data() durante add_activity")
-            return False
-            
-    except Exception as e:
-        error_msg = f"Error al agregar actividad: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        st.error("Error técnico al agregar actividad. Verifica los logs.")
-        return False
 
 def remove_activity(activity_name):
     try:
@@ -1120,16 +1211,17 @@ def tasks_tab():
                     key=f"due_date_{state['editing_task_id'] or 'new'}"
                 )
             
-            # Selector de proyecto
+            # Selector de proyecto - usar nombres en lugar de IDs para mejor UX
             project_options = [""] + [project['name'] for project in state['projects']]
             project_index = 0
             if editing_task and editing_task['project']:
+                # Encontrar el proyecto por ID y obtener su índice
                 for i, project in enumerate(state['projects']):
                     if project['id'] == editing_task['project']:
-                        project_index = i + 1
+                        project_index = i + 1  # +1 porque el primer elemento es vacío
                         break
             
-            project = st.selectbox(
+            project_name = st.selectbox(
                 "Proyecto",
                 project_options,
                 index=project_index,
@@ -1140,12 +1232,20 @@ def tasks_tab():
             with col1:
                 if st.form_submit_button("💾 Guardar"):
                     if name:
+                        # Convertir nombre de proyecto a ID
+                        project_id = ""
+                        if project_name:
+                            for project in state['projects']:
+                                if project['name'] == project_name:
+                                    project_id = project['id']
+                                    break
+                        
                         if editing_task:
                             update_task(state, editing_task['id'], name=name, description=description, 
-                                       priority=priority, due_date=due_date, project=project)
+                                       priority=priority, due_date=due_date, project=project_id)
                             st.success("Tarea actualizada!")
                         else:
-                            add_task(state, name, description, priority, due_date, project)
+                            add_task(state, name, description, priority, due_date, project_id)
                             st.success("Tarea agregada!")
                         state['editing_task_id'] = None
                         st.rerun()
@@ -1205,6 +1305,9 @@ def tasks_tab():
                 col1, col2, col3 = st.columns([3, 1, 1])
                 with col1:
                     st.write(f"• {project['name']}")
+                    # Mostrar número de tareas en este proyecto
+                    task_count = sum(1 for task in state['tasks'] if task.get('project') == project['id'])
+                    st.caption(f"{task_count} tarea(s)")
                 with col2:
                     if st.button("✏️", key=f"edit_project_{project['id']}"):
                         state['editing_project_id'] = project['id']
@@ -1247,7 +1350,7 @@ def tasks_tab():
             if project['name'] == filter_project:
                 project_id = project['id']
                 break
-        filtered_tasks = [task for task in filtered_tasks if task['project'] == project_id]
+        filtered_tasks = [task for task in filtered_tasks if task.get('project') == project_id]
     
     # Mostrar tareas
     if not filtered_tasks:
@@ -1268,7 +1371,7 @@ def tasks_tab():
                     
                     # Obtener nombre del proyecto
                     project_name = "Ninguno"
-                    if task['project']:
+                    if task.get('project'):
                         for project in state['projects']:
                             if project['id'] == task['project']:
                                 project_name = project['name']
@@ -1298,7 +1401,6 @@ def tasks_tab():
                             delete_task(state, task['id'])
                             st.success("Tarea eliminada!")
                             st.rerun()
-
 def stats_tab():
     state = st.session_state.pomodoro_state
     
@@ -1374,42 +1476,49 @@ def settings_tab():
             st.rerun()
 
     with col2:
-        st.subheader("👤 Perfil de Usuario")
-        
-        # Cargar perfil de usuario
-        user_profile = load_user_profile()
-        if user_profile:
-            current_username = user_profile.get('username', '')
-            current_display_name = user_profile.get('display_name', '')
+    st.subheader("👤 Perfil de Usuario")
+    
+    # Cargar perfil de usuario
+    user_profile = load_user_profile()
+    if user_profile:
+        current_username = user_profile.get('username', '')
+        current_display_name = user_profile.get('display_name', '')
+        current_email = user_profile.get('email', '')  # Asegurar que tenemos el email
+    else:
+        current_username = ''
+        current_display_name = ''
+        current_email = st.session_state.user.user.email if hasattr(st.session_state.user.user, 'email') else ''
+    
+    new_username = st.text_input("Nombre de usuario", value=current_username)
+    new_display_name = st.text_input("Nombre para mostrar", value=current_display_name)
+    
+    if st.button("💾 Actualizar Perfil"):
+        if not validate_username(new_username):
+            st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
         else:
-            current_username = ''
-            current_display_name = ''
-        
-        new_username = st.text_input("Nombre de usuario", value=current_username)
-        new_display_name = st.text_input("Nombre para mostrar", value=current_display_name)
-        
-        if st.button("💾 Actualizar Perfil"):
-            if not validate_username(new_username):
-                st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
-            else:
-                try:
-                    user_id = st.session_state.user.user.id
-                    supabase.table('user_profiles').upsert({
-                        'user_id': user_id,
-                        'username': new_username,
-                        'display_name': new_display_name or new_username,
-                        'updated_at': datetime.datetime.now().isoformat()
-                    }).execute()
-                    
-                    # Actualizar estado local
-                    state['username'] = new_username
-                    state['display_name'] = new_display_name or new_username
-                    
-                    st.success("Perfil actualizado!")
-                    save_user_data()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error al actualizar perfil: {str(e)}")
+            try:
+                # Asegurarse de que tenemos el email
+                if not current_email and hasattr(st.session_state.user.user, 'email'):
+                    current_email = st.session_state.user.user.email
+                
+                user_id = st.session_state.user.user.id
+                supabase.table('user_profiles').upsert({
+                    'user_id': user_id,
+                    'email': current_email,  # Incluir el email
+                    'username': new_username,
+                    'display_name': new_display_name or new_username,
+                    'updated_at': datetime.datetime.now().isoformat()
+                }).execute()
+                
+                # Actualizar estado local
+                st.session_state.pomodoro_state['username'] = new_username
+                st.session_state.pomodoro_state['display_name'] = new_display_name or new_username
+                
+                st.success("Perfil actualizado!")
+                save_user_data()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al actualizar perfil: {str(e)}")
         
         st.subheader("🎨 Apariencia")
         theme = st.selectbox("Tema", list(THEMES.keys()), 
