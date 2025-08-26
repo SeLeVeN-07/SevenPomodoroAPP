@@ -803,27 +803,35 @@ def add_activity(activity_name):
             st.error("Nombre de actividad no válido")
             return False
             
-        # Verificar si la actividad ya existe
-        if activity_name in st.session_state.pomodoro_state['activities']:
-            st.warning(f"La actividad '{activity_name}' ya existe")
+        # Limpiar y estandarizar el nombre
+        clean_name = activity_name.strip()
+        
+        # Verificar si la actividad ya existe (case insensitive)
+        existing_activities = [act.lower() for act in st.session_state.pomodoro_state['activities']]
+        if clean_name.lower() in existing_activities:
+            st.warning(f"La actividad '{clean_name}' ya existe")
             return True
             
         # Agregar la nueva actividad
-        st.session_state.pomodoro_state['activities'].append(activity_name)
+        st.session_state.pomodoro_state['activities'].append(clean_name)
         
-        # Debug: mostrar estado antes de guardar
-        logger.info(f"Estado antes de guardar: {st.session_state.pomodoro_state['activities']}")
+        # Debug detallado
+        logger.info(f"Antes de guardar - Actividades: {st.session_state.pomodoro_state['activities']}")
+        logger.info(f"Estado completo: {st.session_state.pomodoro_state}")
         
-        # Forzar guardado
+        # Forzar guardado con verificación
         if save_user_data():
-            st.success(f"Actividad '{activity_name}' agregada correctamente")
+            st.success(f"Actividad '{clean_name}' agregada correctamente")
+            logger.info("Actividad guardada exitosamente en Supabase")
             return True
         else:
             st.error("Error al guardar los cambios")
+            logger.error("Fallo en save_user_data() durante add_activity")
             return False
             
     except Exception as e:
-        logger.error(f"Error al agregar actividad: {str(e)}", exc_info=True)
+        error_msg = f"Error al agregar actividad: {str(e)}"
+        logger.error(error_msg, exc_info=True)
         st.error("Error técnico al agregar actividad. Verifica los logs.")
         return False
         
@@ -1308,9 +1316,13 @@ def settings_tab():
 def remove_activity(activity_name):
     try:
         if 'pomodoro_state' not in st.session_state:
+            logger.error("Estado Pomodoro no disponible")
             return False
             
-        if activity_name not in st.session_state.pomodoro_state['activities']:
+        activities = st.session_state.pomodoro_state.get('activities', [])
+        
+        # Buscar coincidencia exacta (case sensitive)
+        if activity_name not in activities:
             st.warning(f"La actividad '{activity_name}' no existe")
             return False
             
@@ -1324,18 +1336,20 @@ def remove_activity(activity_name):
         st.session_state.pomodoro_state['activities'].remove(activity_name)
         
         # Actualizar actividad actual si es necesario
-        if st.session_state.pomodoro_state['current_activity'] == activity_name:
+        if st.session_state.pomodoro_state.get('current_activity') == activity_name:
             st.session_state.pomodoro_state['current_activity'] = ""
         
+        # Guardar cambios
         if save_user_data():
             st.success(f"Actividad '{activity_name}' eliminada")
+            logger.info(f"Actividad '{activity_name}' eliminada exitosamente")
             return True
         else:
             st.error("Error al guardar los cambios")
             return False
             
     except Exception as e:
-        logger.error(f"Error al eliminar actividad: {str(e)}")
+        logger.error(f"Error al eliminar actividad: {str(e)}", exc_info=True)
         st.error("Error técnico al eliminar actividad")
         return False
         
@@ -1556,6 +1570,39 @@ if __name__ == "__main__":
             st.rerun()
 
 #####DEBUG################################################
+
+def debug_activities():
+    if 'user' in st.session_state and st.session_state.user:
+        st.subheader("🔍 Debug - Actividades")
+        
+        try:
+            # Mostrar actividades locales
+            st.write("**Actividades en estado local:**")
+            st.write(st.session_state.pomodoro_state.get('activities', []))
+            
+            # Verificar en Supabase
+            response = supabase.table('user_data').select('pomodoro_data->activities').eq(
+                'user_id', str(st.session_state.user.user.id)
+            ).execute()
+            
+            st.write("**Actividades en Supabase:**")
+            if response.data:
+                st.write(response.data[0]['pomodoro_data']['activities'])
+            else:
+                st.warning("No se encontraron datos en Supabase")
+                
+            # Verificar estructura completa
+            if st.button("Ver estado completo en Supabase"):
+                full_data = supabase.table('user_data').select('*').eq(
+                    'user_id', str(st.session_state.user.user.id)
+                ).execute()
+                st.json(full_data.data[0] if full_data.data else {})
+                
+        except Exception as e:
+            st.error(f"Error en debug: {str(e)}")
+
+# Llama a esta función en tu settings_tab()
+
 # Agrega esto temporalmente para debug
 if st.button('Forzar guardado y ver estado'):
     st.write("Estado actual:", st.session_state.pomodoro_state)
