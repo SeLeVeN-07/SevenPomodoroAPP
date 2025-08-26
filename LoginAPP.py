@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Pomodoro Pro - Versión Mejorada con Supabase Integration
+Pomodoro Pro - Versión Mejorada con Soporte para Nombre de Usuario
 """
 import streamlit as st
 import pandas as pd
@@ -19,6 +19,13 @@ import io
 import gzip
 from collections import defaultdict
 from supabase import create_client, Client
+import os
+import re
+import logging
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Configuración de la página
 st.set_page_config(
@@ -28,14 +35,23 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Configuración de Supabase
-SUPABASE_URL = "https://puyhhnglmjjpzzlpltkj.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB1eWhobmdsbWpqcHp6bHBsdGtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYyMjgxMDIsImV4cCI6MjA3MTgwNDEwMn0.AEnoGRTO0Ex0tQU1r-oUkolpjf85t4mGTCrLG86sgow"
+# Configuración de Supabase (usar variables de entorno en producción)
+SUPABASE_URL = os.getenv('SUPABASE_URL', "https://puyhhnglmjjpzzlpltkj.supabase.co")
+SUPABASE_KEY = os.getenv('SUPABASE_KEY', "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB1eWhobmdsbWpqcHp6bHBsdGtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYyMjgxMDIsImV4cCI6MjA3MTgwNDEwMn0.AEnoGRTO0Ex0tQU1r-oUkolpjf85t4mGTCrLG86sgow")
 
-# Inicializar cliente Supabase
+# Inicializar cliente Supabase con manejo de errores
 @st.cache_resource
 def init_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    try:
+        client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        # Verificar conexión
+        client.table('user_data').select('*').limit(1).execute()
+        logger.info("Conexión a Supabase establecida correctamente")
+        return client
+    except Exception as e:
+        logger.error(f"Error al conectar con Supabase: {str(e)}")
+        st.error(f"Error al conectar con la base de datos: {str(e)}")
+        return None
 
 supabase = init_supabase()
 
@@ -112,12 +128,27 @@ def get_default_state():
         'dragging_item': None,
         'drag_type': None,
         'drag_source': None,
-        'session_history': []
+        'session_history': [],
+        'username': "",  # Nuevo campo para nombre de usuario
+        'display_name': ""  # Nuevo campo para nombre para mostrar
     }
 
 # ==============================================
 # Funciones de autenticación y almacenamiento
 # ==============================================
+
+def validate_email(email):
+    """Valida el formato de un email"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
+def validate_username(username):
+    """Valida el formato de un nombre de usuario"""
+    if not username:
+        return False
+    # Permitir letras, números, guiones y guiones bajos, entre 3 y 20 caracteres
+    pattern = r'^[a-zA-Z0-9_-]{3,20}$'
+    return re.match(pattern, username) is not None
 
 def auth_section():
     """Maneja la autenticación del usuario"""
@@ -133,34 +164,59 @@ def auth_section():
                 password = st.text_input("Contraseña", type="password")
                 
                 if st.form_submit_button("Ingresar"):
-                    try:
-                        user = supabase.auth.sign_in_with_password({
-                            "email": email,
-                            "password": password
-                        })
-                        st.session_state.user = user
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al iniciar sesión: {str(e)}")
+                    if not email or not password:
+                        st.error("Por favor completa todos los campos")
+                    elif not validate_email(email):
+                        st.error("Por favor ingresa un email válido")
+                    else:
+                        try:
+                            user = supabase.auth.sign_in_with_password({
+                                "email": email,
+                                "password": password
+                            })
+                            st.session_state.user = user
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al iniciar sesión: {str(e)}")
         
         with tab2:
             with st.form("signup_form"):
                 new_email = st.text_input("Correo electrónico (registro)")
                 new_password = st.text_input("Contraseña (registro)", type="password")
                 confirm_password = st.text_input("Confirmar contraseña", type="password")
+                username = st.text_input("Nombre de usuario")
+                display_name = st.text_input("Nombre para mostrar (opcional)")
                 
                 if st.form_submit_button("Crear cuenta"):
-                    if new_password == confirm_password:
+                    if not new_email or not new_password or not confirm_password or not username:
+                        st.error("Por favor completa todos los campos obligatorios")
+                    elif not validate_email(new_email):
+                        st.error("Por favor ingresa un email válido")
+                    elif not validate_username(username):
+                        st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
+                    elif new_password != confirm_password:
+                        st.error("Las contraseñas no coinciden")
+                    else:
                         try:
                             user = supabase.auth.sign_up({
                                 "email": new_email,
                                 "password": new_password
                             })
+                            
+                            # Crear perfil de usuario con nombre de usuario
+                            if user:
+                                user_id = user.user.id
+                                supabase.table('user_profiles').insert({
+                                    'user_id': user_id,
+                                    'email': new_email,
+                                    'username': username,
+                                    'display_name': display_name or username,
+                                    'created_at': datetime.datetime.now().isoformat()
+                                }).execute()
+                            
                             st.success("¡Cuenta creada! Por favor inicia sesión.")
                         except Exception as e:
                             st.error(f"Error al registrar: {str(e)}")
-                    else:
-                        st.error("Las contraseñas no coinciden")
     else:
         if st.sidebar.button("Cerrar sesión"):
             supabase.auth.sign_out()
@@ -173,13 +229,26 @@ def save_user_data():
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
         try:
             user_id = st.session_state.user.user.id
-            data = st.session_state.pomodoro_state
+            data = st.session_state.pomodoro_state.copy()  # Hacer una copia para no modificar el original
+            
+            # Función recursiva para convertir datetime a string
+            def convert_datetime(obj):
+                if isinstance(obj, (datetime.datetime, datetime.date)):
+                    return obj.isoformat()
+                elif isinstance(obj, list):
+                    return [convert_datetime(item) for item in obj]
+                elif isinstance(obj, dict):
+                    return {key: convert_datetime(value) for key, value in obj.items()}
+                return obj
+            
+            # Convertir todos los datetime en los datos
+            serialized_data = convert_datetime(data)
             
             # Usamos upsert para crear o actualizar el registro
             response = supabase.table('user_data').upsert({
                 'user_id': user_id,
                 'email': st.session_state.user.user.email,
-                'pomodoro_data': data,
+                'pomodoro_data': serialized_data,
                 'last_updated': datetime.datetime.now().isoformat()
             }).execute()
             
@@ -199,25 +268,122 @@ def load_user_data():
             response = supabase.table('user_data').select('*').eq('user_id', user_id).execute()
             
             if response.data:
-                return response.data[0]['pomodoro_data']
+                data = response.data[0]['pomodoro_data']
+                
+                # Función para convertir strings ISO a datetime
+                def parse_datetime(obj):
+                    if isinstance(obj, str):
+                        try:
+                            return datetime.datetime.fromisoformat(obj)
+                        except ValueError:
+                            try:
+                                return datetime.date.fromisoformat(obj)
+                            except ValueError:
+                                return obj
+                    elif isinstance(obj, list):
+                        return [parse_datetime(item) for item in obj]
+                    elif isinstance(obj, dict):
+                        return {key: parse_datetime(value) for key, value in obj.items()}
+                    return obj
+                
+                return parse_datetime(data)
         except Exception as e:
             st.error(f"Error al cargar datos: {str(e)}")
+    return None
+
+def load_user_profile():
+    """Carga el perfil del usuario desde Supabase"""
+    if 'user' in st.session_state and st.session_state.user:
+        try:
+            user_id = st.session_state.user.user.id
+            response = supabase.table('user_profiles').select('*').eq('user_id', user_id).execute()
+            
+            if response.data:
+                return response.data[0]
+        except Exception as e:
+            st.error(f"Error al cargar perfil: {str(e)}")
     return None
 
 def auto_save():
     """Guarda automáticamente cada 30 segundos si hay cambios"""
     if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
-        if 'last_saved' not in st.session_state or \
-           (datetime.datetime.now() - st.session_state.last_saved).seconds > 30:
-            if save_user_data():
-                st.session_state.last_saved = datetime.datetime.now()
-                st.toast("Datos guardados automáticamente", icon="💾")
+        try:
+            if 'last_saved' not in st.session_state or \
+               (datetime.datetime.now() - st.session_state.last_saved).seconds > 30:
+                if save_user_data():
+                    st.session_state.last_saved = datetime.datetime.now()
+                    st.toast("Datos guardados automáticamente", icon="💾")
+        except Exception as e:
+            logger.error(f"Error en guardado automático: {str(e)}")
+
+def backup_local_data():
+    """Crea una copia de seguridad local de los datos"""
+    if 'pomodoro_state' in st.session_state:
+        try:
+            with open('local_backup.json', 'w') as f:
+                # Convertir datetime a string antes de guardar
+                def default_serializer(obj):
+                    if isinstance(obj, (datetime.datetime, datetime.date)):
+                        return obj.isoformat()
+                    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+                
+                json.dump(st.session_state.pomodoro_state, f, default=default_serializer, indent=2)
+        except Exception as e:
+            logger.error(f"Error al crear backup local: {str(e)}")
+
+def restore_local_data():
+    """Restaura datos desde una copia de seguridad local"""
+    try:
+        with open('local_backup.json', 'r') as f:
+            data = json.load(f)
+            
+            # Convertir strings ISO a datetime
+            def parse_datetime(obj):
+                if isinstance(obj, str):
+                    try:
+                        return datetime.datetime.fromisoformat(obj)
+                    except ValueError:
+                        try:
+                            return datetime.date.fromisoformat(obj)
+                        except ValueError:
+                            return obj
+                elif isinstance(obj, list):
+                    return [parse_datetime(item) for item in obj]
+                elif isinstance(obj, dict):
+                    return {key: parse_datetime(value) for key, value in obj.items()}
+                return obj
+            
+            return parse_datetime(data)
+    except:
+        return None
+
+def check_session():
+    """Verifica si la sesión del usuario sigue siendo válida"""
+    if 'user' in st.session_state and st.session_state.user:
+        try:
+            # Verificar token con Supabase
+            user = supabase.auth.get_user()
+            if not user:
+                st.session_state.user = None
+                st.rerun()
+        except:
+            st.session_state.user = None
+            st.rerun()
 
 # ==============================================
 # Funciones auxiliares
 # ==============================================
 
 def format_time(seconds):
+    """
+    Convierte segundos a formato MM:SS
+    
+    Args:
+        seconds (int): Tiempo en segundos
+        
+    Returns:
+        str: Tiempo formateado como MM:SS
+    """
     mins = int(seconds // 60)
     secs = int(seconds % 60)
     return f"{mins:02d}:{secs:02d}"
@@ -251,6 +417,22 @@ def determine_next_phase(was_work):
         return "Descanso Largo"
     return "Descanso Corto"
 
+def parse_date(date_input):
+    """Convierte diferentes formatos de fecha a objeto date"""
+    if isinstance(date_input, date):
+        return date_input
+    if isinstance(date_input, datetime.datetime):
+        return date_input.date()
+    if isinstance(date_input, str):
+        try:
+            return datetime.datetime.strptime(date_input, "%Y-%m-%d").date()
+        except ValueError:
+            try:
+                return datetime.datetime.strptime(date_input, "%d/%m/%Y").date()
+            except ValueError:
+                return None
+    return None
+
 # ==============================================
 # Funciones de registro de sesiones
 # ==============================================
@@ -260,8 +442,8 @@ def log_session():
     if state['total_active_time'] >= 0.1:
         minutes = round(state['total_active_time'] / 60, 2)
         log_entry = {
-            'Fecha': datetime.datetime.now().strftime("%Y-%m-%d"),
-            'Hora Inicio': state['start_time'].strftime("%H:%M:%S") if state['start_time'] else datetime.datetime.now().strftime("%H:%M:%S"),
+            'Fecha': datetime.datetime.now().date().isoformat(),  # Convertir a string
+            'Hora Inicio': (state['start_time'] or datetime.datetime.now()).strftime("%H:%M:%S"),
             'Tiempo Activo (min)': minutes,
             'Actividad': state['current_activity'],
             'Proyecto': state['current_project'],
@@ -270,6 +452,10 @@ def log_session():
         
         # Guardar en el historial de sesiones
         state['session_history'].append(log_entry)
+        
+        # Limitar el tamaño del historial
+        if len(state['session_history']) > 1000:
+            state['session_history'] = state['session_history'][-1000:]
         
         # Actualizar logros
         if state['current_phase'] == "Trabajo":
@@ -321,7 +507,7 @@ def analyze_data():
                 'project': project, 'task': task
             })
         except Exception as e:
-            print(f"Error procesando entrada: {e}")
+            logger.error(f"Error procesando entrada: {e}")
     return data
 
 # ==============================================
@@ -356,7 +542,7 @@ def edit_task_modal():
                 index=["Baja", "Media", "Alta", "Urgente"].index(task['priority'])
             )
             
-            new_deadline = st.date_input("Fecha límite", value=task['deadline'])
+            new_deadline = st.date_input("Fecha límite", value=parse_date(task['deadline']) or date.today())
             
             col1, col2 = st.columns(2)
             with col1:
@@ -519,7 +705,8 @@ def hierarchical_view():
                             for task in project_tasks:
                                 cols = st.columns([5, 1, 1])
                                 with cols[0]:
-                                    st.write(f"  └ {task['name']} ({task['priority']}) - Vence: {task['deadline']}")
+                                    deadline_str = task['deadline'].isoformat() if isinstance(task['deadline'], (date, datetime.datetime)) else str(task['deadline'])
+                                    st.write(f"  └ {task['name']} ({task['priority']}) - Vence: {deadline_str}")
                                 with cols[1]:
                                     if st.button("✏️", key=f"edit_task_{task['name']}_{project['name']}"):
                                         state['editing_task'] = task
@@ -580,8 +767,9 @@ def display_filtered_tasks(filter_activity, filter_project, task_status):
                 cols = st.columns([4, 1, 1, 1])
                 with cols[0]:
                     status = "✅ " if task['completed'] else "📝 "
+                    deadline_str = task['deadline'].isoformat() if isinstance(task['deadline'], (date, datetime.datetime)) else str(task['deadline'])
                     st.write(f"{status}**{task['name']}**")
-                    st.caption(f"Proyecto: {task['project']} | Prioridad: {task['priority']} | Vence: {task['deadline']}")
+                    st.caption(f"Proyecto: {task['project']} | Prioridad: {task['priority']} | Vence: {deadline_str}")
                 
                 with cols[1]:
                     if st.button("✏️", key=f"edit_{i}_{task['name']}_{task['project']}"):
@@ -771,8 +959,8 @@ def timer_tab():
                 state['start_time'] = datetime.datetime.now()
                 state['total_active_time'] = 0
                 # Iniciar el temporizador
-                st.session_state.timer_start = time.time()
-                st.session_state.last_update = time.time()
+                st.session_state.timer_start = time.monotonic()
+                st.session_state.last_update = time.monotonic()
                 st.rerun()
 
     with col2:
@@ -780,14 +968,14 @@ def timer_tab():
                    use_container_width=True, disabled=not state['timer_running'], key="pause_timer"):
             if state['timer_running'] and not state['timer_paused']:
                 state['timer_paused'] = True
-                state['paused_time'] = time.time()
+                state['paused_time'] = time.monotonic()
                 st.rerun()
             elif state['timer_paused']:
                 state['timer_paused'] = False
                 # Ajustar el tiempo de inicio para compensar la pausa
-                pause_duration = time.time() - state['paused_time']
+                pause_duration = time.monotonic() - state['paused_time']
                 st.session_state.timer_start += pause_duration
-                st.session_state.last_update = time.time()
+                st.session_state.last_update = time.monotonic()
                 st.rerun()
 
     with col3:
@@ -822,7 +1010,7 @@ def timer_tab():
 
     # Actualizar el temporizador si está en ejecución
     if state['timer_running'] and not state['timer_paused']:
-        current_time = time.time()
+        current_time = time.monotonic()
         elapsed = current_time - st.session_state.last_update
         st.session_state.last_update = current_time
 
@@ -911,6 +1099,11 @@ def stats_tab():
                     names=list(data['activities'].keys()),
                     title="Distribución de Actividades"
                 )
+                fig.update_layout(
+                    autosize=True,
+                    margin=dict(autoexpand=True),
+                    height=400
+                )
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No hay datos para mostrar")
@@ -927,6 +1120,11 @@ def stats_tab():
                     values=list(project_data.values()), 
                     names=list(project_data.keys()),
                     title="Distribución por Proyecto"
+                )
+                fig.update_layout(
+                    autosize=True,
+                    margin=dict(autoexpand=True),
+                    height=400
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -948,6 +1146,11 @@ def stats_tab():
                 daily_totals, x='date', y='minutes',
                 title="Evolución del Tiempo por Día",
                 labels={'date': 'Fecha', 'minutes': 'Minutos'}
+            )
+            fig.update_layout(
+                autosize=True,
+                margin=dict(autoexpand=True),
+                height=400
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -977,6 +1180,11 @@ def stats_tab():
                 x=projects,
                 y=activities,
                 title="Distribución de Tiempo por Actividad y Proyecto"
+            )
+            fig.update_layout(
+                autosize=True,
+                margin=dict(autoexpand=True),
+                height=500
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -1119,6 +1327,43 @@ def settings_tab():
             st.rerun()
 
     with col2:
+        st.subheader("👤 Perfil de Usuario")
+        
+        # Cargar perfil de usuario
+        user_profile = load_user_profile()
+        if user_profile:
+            current_username = user_profile.get('username', '')
+            current_display_name = user_profile.get('display_name', '')
+        else:
+            current_username = ''
+            current_display_name = ''
+        
+        new_username = st.text_input("Nombre de usuario", value=current_username, key="username_input")
+        new_display_name = st.text_input("Nombre para mostrar", value=current_display_name, key="display_name_input")
+        
+        if st.button("💾 Actualizar Perfil", key="update_profile"):
+            if not validate_username(new_username):
+                st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
+            else:
+                try:
+                    user_id = st.session_state.user.user.id
+                    supabase.table('user_profiles').upsert({
+                        'user_id': user_id,
+                        'username': new_username,
+                        'display_name': new_display_name or new_username,
+                        'updated_at': datetime.datetime.now().isoformat()
+                    }).execute()
+                    
+                    # Actualizar estado local
+                    state['username'] = new_username
+                    state['display_name'] = new_display_name or new_username
+                    
+                    st.success("Perfil actualizado!")
+                    save_user_data()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al actualizar perfil: {str(e)}")
+        
         st.subheader("🎨 Personalización")
         theme = st.selectbox("Tema", list(THEMES.keys()), 
                            index=list(THEMES.keys()).index(state['current_theme']), 
@@ -1150,16 +1395,26 @@ def settings_tab():
 
     st.subheader("📂 Gestión de Datos")
     
-    if st.button("🔄 Reiniciar Datos", key="reset_data"):
-        state['activities'] = []
-        state['tasks'] = []
-        state['completed_tasks'] = []
-        state['study_goals'] = []
-        state['projects'] = []
-        state['session_history'] = []
-        st.success("Datos reiniciados (excepto configuración)")
-        save_user_data()
-        st.rerun()
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("💾 Guardar Ahora", key="manual_save"):
+            if save_user_data():
+                st.success("Datos guardados correctamente!")
+            else:
+                st.error("Error al guardar datos")
+    
+    with col2:
+        if st.button("🔄 Reiniciar Datos", key="reset_data"):
+            state['activities'] = []
+            state['tasks'] = []
+            state['completed_tasks'] = []
+            state['study_goals'] = []
+            state['projects'] = []
+            state['session_history'] = []
+            st.success("Datos reiniciados (excepto configuración)")
+            save_user_data()
+            st.rerun()
 
 # ==============================================
 # Pestaña Acerca de
@@ -1182,14 +1437,16 @@ def about_tab():
     - 🎨 Múltiples temas visuales
     - 📈 Estadísticas y análisis de tu rendimiento
     - ☁️ Almacenamiento en la nube con Supabase
+    - 👤 Perfiles de usuario personalizables
 
     ### Cómo usar esta aplicación
     1. Crea una cuenta o inicia sesión
     2. Configura tus tiempos preferidos en la pestaña de Configuración
-    3. Selecciona una actividad y proyecto
-    4. Inicia el temporizador y concéntrate en tu tarea
-    5. Toma descansos según las indicaciones
-    6. Revisa tus estadísticas para mejorar tu productividad
+    3. Personaliza tu perfil con nombre de usuario y nombre para mostrar
+    4. Selecciona una actividad y proyecto
+    5. Inicia el temporizador y concéntrate en tu tarea
+    6. Toma descansos según las indicaciones
+    7. Revisa tus estadísticas para mejorar tu productividad
     
     Tus datos se guardarán automáticamente en la nube y estarán disponibles desde cualquier dispositivo.
     """)
@@ -1209,8 +1466,9 @@ def info_tab():
         st.markdown("""
         1. Crea una cuenta o inicia sesión
         2. Ve a la pestaña Configuración en la barra lateral
-        3. Ajusta los tiempos según tus preferencias
-        4. Selecciona un tema visual de tu preferencia
+        3. Configura tu perfil con nombre de usuario y nombre para mostrar
+        4. Ajusta los tiempos según tus preferencias
+        5. Selecciona un tema visual de tu preferencia
         """)
 
         st.subheader("Uso del Temporizador")
@@ -1232,6 +1490,9 @@ def info_tab():
             
         with st.expander("¿Dónde se guardan mis datos?"):
             st.markdown("Tus datos se guardan automáticamente en Supabase, un servicio en la nube. Esto te permite acceder a tus datos desde cualquier dispositivo.")
+            
+        with st.expander("¿Cómo cambio mi nombre de usuario?"):
+            st.markdown("Ve a la pestaña **Configuración** y busca la sección 'Perfil de Usuario'. Allí puedes cambiar tu nombre de usuario y nombre para mostrar.")
 
     with tab3:
         st.header("Contacto y Soporte")
@@ -1266,24 +1527,12 @@ def check_alerts():
             if deadline is None:
                 continue
                 
-            # Convertir a date si es string (ajusta el formato según tus datos)
-            if isinstance(deadline, str):
-                try:
-                    # Intentar parsear con diferentes formatos
-                    try:
-                        deadline = datetime.datetime.strptime(deadline, "%Y-%m-%d").date()
-                    except ValueError:
-                        # Intentar otro formato si el primero falla
-                        deadline = datetime.datetime.strptime(deadline, "%d/%m/%Y").date()
-                except ValueError:
-                    # Si no se puede parsear, saltar esta tarea
-                    continue
-            elif isinstance(deadline, datetime.datetime):
-                deadline = deadline.date()
-            elif not isinstance(deadline, date):
+            # Convertir a date
+            deadline_date = parse_date(deadline)
+            if not deadline_date:
                 continue
                 
-            days_remaining = (deadline - today).days
+            days_remaining = (deadline_date - today).days
             
             if days_remaining == 0:
                 alerts.append(f"⏰ Hoy: {task.get('name', 'Tarea sin nombre')}")
@@ -1305,9 +1554,23 @@ def sidebar():
     # Solo mostrar el resto si el usuario está autenticado
     if 'user' in st.session_state and st.session_state.user:
         state = st.session_state.pomodoro_state
+        
+        # Verificar sesión
+        check_session()
 
-        st.sidebar.title("Pomodoro Pro 🍅")
-        st.sidebar.write(f"Bienvenido, {st.session_state.user.user.email}")
+        # Mostrar nombre de usuario
+        display_name = state.get('display_name', '')
+        username = state.get('username', '')
+        email = st.session_state.user.user.email
+        
+        if display_name:
+            st.sidebar.title(f"Pomodoro Pro 🍅")
+            st.sidebar.write(f"Bienvenido, {display_name}")
+            if username:
+                st.sidebar.caption(f"@{username}")
+        else:
+            st.sidebar.title("Pomodoro Pro 🍅")
+            st.sidebar.write(f"Bienvenido, {email}")
 
         # Navegación por pestañas
         st.sidebar.subheader("Navegación")
@@ -1329,7 +1592,10 @@ def sidebar():
         if 'last_saved' in st.session_state:
             last_saved = st.session_state.last_saved
             if isinstance(last_saved, str):
-                last_saved = datetime.datetime.fromisoformat(last_saved)
+                try:
+                    last_saved = datetime.datetime.fromisoformat(last_saved)
+                except ValueError:
+                    last_saved = datetime.datetime.now()
             st.sidebar.caption(f"Último guardado: {last_saved.strftime('%H:%M:%S')}")
 
 # ==============================================
@@ -1346,6 +1612,12 @@ def main():
                 st.session_state.pomodoro_state = user_data
             else:
                 st.session_state.pomodoro_state = get_default_state()
+                
+            # Cargar perfil de usuario
+            user_profile = load_user_profile()
+            if user_profile:
+                st.session_state.pomodoro_state['username'] = user_profile.get('username', '')
+                st.session_state.pomodoro_state['display_name'] = user_profile.get('display_name', '')
         else:
             st.session_state.pomodoro_state = get_default_state()
     
@@ -1356,6 +1628,12 @@ def main():
     if 'user' in st.session_state and st.session_state.user:
         # Guardar automáticamente cada 30 segundos
         auto_save()
+        
+        # Crear backup local periódicamente
+        if 'last_backup' not in st.session_state or \
+           (datetime.datetime.now() - st.session_state.last_backup).seconds > 300:  # Cada 5 minutos
+            backup_local_data()
+            st.session_state.last_backup = datetime.datetime.now()
         
         # Obtener la pestaña seleccionada
         selected_tab = st.session_state.sidebar_nav
@@ -1386,8 +1664,9 @@ def main():
         
         Para comenzar a usar la aplicación, por favor:
         1. Crea una cuenta o inicia sesión en la barra lateral
-        2. Tus datos se guardarán automáticamente en la nube
-        3. Podrás acceder a tu información desde cualquier dispositivo
+        2. Personaliza tu perfil con nombre de usuario
+        3. Tus datos se guardarán automáticamente en la nube
+        4. Podrás acceder a tu información desde cualquier dispositivo
         
         **Características principales:**
         - Temporizador Pomodoro configurable
@@ -1395,6 +1674,7 @@ def main():
         - Seguimiento de productividad
         - Estadísticas detalladas
         - Almacenamiento en la nube
+        - Perfiles de usuario personalizables
         """)
 
 # ==============================================
