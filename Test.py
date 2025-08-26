@@ -283,7 +283,38 @@ def validate_state(state):
 # ==============================================
 # Funciones de autenticación mejoradas
 # ==============================================
+def initialize_session_state():
+    """Inicializa el estado de la sesión de forma robusta"""
+    try:
+        with st.spinner("Cargando datos..."):
+            if 'user' in st.session_state and st.session_state.user:
+                # Cargar datos existentes
+                user_data = load_user_data()
+                st.session_state.pomodoro_state = validate_state(user_data) if user_data else get_default_state()
+                
+                # Guardar estado inicial si es nuevo usuario
+                if not user_data:
+                    save_user_data()
+                
+                # Cargar perfil
+                load_user_profile_data()
+            else:
+                st.session_state.pomodoro_state = get_default_state()
+    except Exception as e:
+        logger.error(f"Error al inicializar estado: {str(e)}")
+        st.session_state.pomodoro_state = get_default_state()
+        st.error("Error al cargar datos. Usando configuración por defecto.")
 
+def improved_auto_save():
+    """Guardado automático mejorado con verificación de cambios"""
+    if 'last_saved' not in st.session_state:
+        st.session_state.last_saved = datetime.datetime.min
+    
+    time_since_last_save = (datetime.datetime.now() - st.session_state.last_saved).total_seconds()
+    
+    if time_since_last_save > 15:  # Guardar cada 15 segundos
+        save_user_data()
+        
 def validate_email(email):
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
@@ -419,13 +450,25 @@ def save_user_data():
         try:
             # Convertir el estado a JSON seguro
             state = st.session_state.pomodoro_state.copy()
-            serialized_data = json.dumps(state, default=str)  # Usar default=str para manejar datetime
             
-            # Intentar guardar con reintentos
-            for attempt in range(3):
+            # Asegurar que los datos importantes estén actualizados
+            state['last_updated'] = datetime.datetime.now().isoformat()
+            
+            # Serialización robusta
+            def json_serial(obj):
+                if isinstance(obj, (datetime.datetime, datetime.date)):
+                    return obj.isoformat()
+                raise TypeError(f"Type {type(obj)} not serializable")
+            
+            serialized_data = json.dumps(state, default=json_serial)
+            
+            # Guardado con verificación
+            max_retries = 3
+            for attempt in range(max_retries):
                 try:
                     response = supabase.table('user_data').upsert({
                         'user_id': st.session_state.user.user.id,
+                        'email': st.session_state.user.user.email,
                         'pomodoro_data': json.loads(serialized_data),
                         'last_updated': datetime.datetime.now().isoformat()
                     }).execute()
@@ -433,8 +476,12 @@ def save_user_data():
                     if response.data:
                         st.session_state.last_saved = datetime.datetime.now()
                         return True
+                    
                 except Exception as e:
-                    logger.error(f"Intento {attempt+1} fallido al guardar: {str(e)}")
+                    logger.warning(f"Intento {attempt + 1} fallido al guardar: {str(e)}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"Error al guardar después de {max_retries} intentos: {str(e)}")
+                        return False
                     time.sleep(1)  # Esperar antes de reintentar
             
             return False
@@ -1281,10 +1328,8 @@ def sidebar():
     if 'user' in st.session_state and st.session_state.user:
         state = st.session_state.pomodoro_state
         
-        # Mostrar información del usuario
         st.sidebar.title(f"🍅 Pomodoro Pro")
         
-        # Mostrar nombre de usuario si está disponible
         if state['display_name']:
             st.sidebar.write(f"Bienvenido, {state['display_name']}")
             if state['username']:
@@ -1292,41 +1337,47 @@ def sidebar():
         else:
             st.sidebar.write(f"Bienvenido, {st.session_state.user.user.email}")
         
-        # Navegación
         st.sidebar.radio(
             "Navegación",
             ["🍅 Temporizador", "📋 Tareas", "📊 Estadísticas", "⚙️ Configuración"],
             key='current_tab'
         )
         
-        # Cerrar sesión con manejo mejorado
+        # Botón de cierre de sesión mejorado
         if st.sidebar.button("Cerrar sesión", key="logout_button"):
+            # Crear un contenedor para mensajes
+            logout_container = st.empty()
+            logout_container.info("Guardando datos antes de cerrar sesión...")
+            
             try:
-                # Mostrar indicador de progreso
-                with st.spinner("Guardando datos antes de cerrar sesión..."):
-                    # Guardar datos antes de cerrar
-                    if 'pomodoro_state' in st.session_state:
-                        if not save_user_data():
-                            st.error("No se pudieron guardar todos los datos. Intenta nuevamente.")
-                            return
-                    
-                    # Pequeña pausa para asegurar el guardado
-                    time.sleep(0.5)
-                    
-                    # Cerrar sesión en Supabase
-                    supabase.auth.sign_out()
-                    
-                    # Limpiar el estado de la sesión
-                    st.session_state.clear()
-                    
-                    # Mostrar mensaje de éxito
-                    st.toast("Sesión cerrada correctamente", icon="✅")
-                    
-                    # Recargar la aplicación
-                    st.rerun()
+                # Guardar datos de forma síncrona
+                if 'pomodoro_state' in st.session_state:
+                    save_success = save_user_data()
+                    if not save_success:
+                        logout_container.error("Error al guardar datos. Intenta nuevamente.")
+                        return
+                
+                # Pequeña pausa para asegurar el guardado
+                time.sleep(1)
+                
+                # Cerrar sesión en Supabase
+                supabase.auth.sign_out()
+                
+                # Limpiar solo lo necesario
+                keys_to_keep = ['_theme', '_last_flush_time']  # Mantener configuraciones de Streamlit
+                new_state = {k: v for k, v in st.session_state.items() if k in keys_to_keep}
+                st.session_state.clear()
+                st.session_state.update(new_state)
+                
+                # Mostrar confirmación
+                logout_container.success("Sesión cerrada correctamente. Redirigiendo...")
+                time.sleep(1)
+                st.rerun()
+                
             except Exception as e:
-                st.error(f"Error al cerrar sesión: {str(e)}")
                 logger.error(f"Error en cierre de sesión: {str(e)}")
+                logout_container.error(f"Error al cerrar sesión: {str(e)}")
+                
 def main():
     # Inicialización del estado con verificación mejorada
     if 'pomodoro_state' not in st.session_state:
@@ -1348,8 +1399,10 @@ def main():
                         logger.info("Usando estado por defecto (sin datos previos)")
                     
                     # Forzar guardado inicial para crear registro si no existe
-                    save_user_data()
-                    logger.info("Guardado inicial completado")
+                    if save_user_data():
+                        logger.info("Guardado inicial completado")
+                    else:
+                        logger.warning("Hubo un problema con el guardado inicial")
                 else:
                     # Usuario no autenticado - estado por defecto
                     st.session_state.pomodoro_state = get_default_state()
@@ -1371,19 +1424,26 @@ def main():
                 st.session_state.clear()
                 st.rerun()
 
-    # Verificar y mantener la sesión activa
+    # Verificar y mantener la sesión activa con manejo mejorado
     if 'user' in st.session_state and st.session_state.user:
         try:
             # Verificar si el token sigue siendo válido
             user = supabase.auth.get_user()
             if not user:
-                st.session_state.user = None
-                st.session_state.pomodoro_state = None
+                logger.warning("Sesión expirada o inválida - limpiando estado")
+                # Limpiar solo lo necesario manteniendo configuraciones
+                keys_to_keep = ['_theme', '_last_flush_time']
+                new_state = {k: v for k, v in st.session_state.items() if k in keys_to_keep}
+                st.session_state.clear()
+                st.session_state.update(new_state)
                 st.rerun()
         except Exception as e:
             logger.error(f"Error al verificar sesión: {str(e)}")
-            st.session_state.user = None
-            st.session_state.pomodoro_state = None
+            # Limpieza parcial del estado
+            if 'user' in st.session_state:
+                del st.session_state['user']
+            if 'pomodoro_state' in st.session_state:
+                del st.session_state['pomodoro_state']
             st.rerun()
     
     # Barra lateral
@@ -1392,8 +1452,17 @@ def main():
     # Contenido principal
     if 'user' in st.session_state and st.session_state.user:
         try:
-            # Guardado automático
-            auto_save()
+            # Guardado automático mejorado
+            if 'last_saved' not in st.session_state:
+                st.session_state.last_saved = datetime.datetime.now()
+            
+            # Guardar cada 10 segundos o cuando hay cambios importantes
+            now = datetime.datetime.now()
+            if (now - st.session_state.last_saved).total_seconds() > 10 or st.session_state.get('force_save', False):
+                if save_user_data():
+                    st.session_state.last_saved = now
+                    if 'force_save' in st.session_state:
+                        del st.session_state['force_save']
             
             # Mostrar pestaña seleccionada
             current_tab = st.session_state.get('current_tab', "🍅 Temporizador")
@@ -1417,85 +1486,92 @@ def main():
             logger.error(f"Error en la interfaz principal: {str(e)}")
             st.error("¡Oops! Algo salió mal. Por favor recarga la página.")
             if st.button("Recargar aplicación"):
+                # Limpieza selectiva en lugar de clear() completo
+                keys_to_keep = ['_theme', '_last_flush_time', 'pomodoro_state']
+                new_state = {k: v for k, v in st.session_state.items() if k in keys_to_keep}
                 st.session_state.clear()
+                st.session_state.update(new_state)
                 st.rerun()
     
     else:
         # Pantalla de bienvenida para usuarios no autenticados
-        st.title("🍅 Pomodoro Pro")
-        st.markdown("""
-        ### ¡Bienvenido a Pomodoro Pro!
-        
-        Para comenzar:
-        1. Crea una cuenta o inicia sesión en la barra lateral
-        2. Configura tus tiempos preferidos
-        3. Comienza a mejorar tu productividad
-        
-        **Características:**
-        - Temporizador Pomodoro personalizable
-        - Gestión de tareas y proyectos
-        - Seguimiento de tu progreso
-        - Estadísticas detalladas
-        - Almacenamiento en la nube
-        - Perfil de usuario personalizable
-        """)
-        
-        # Sección de demostración
-        st.divider()
-        st.subheader("Demostración del Temporizador")
-        
-        # Mostrar un temporizador de ejemplo (solo visualización)
-        demo_time = st.slider("Tiempo de demostración (minutos)", 1, 60, 25)
-        demo_phase = st.selectbox("Fase de demostración", ["Trabajo", "Descanso Corto", "Descanso Largo"])
-        
-        # Visualización del temporizador de demo
-        theme = THEMES['Claro']  # Usar tema claro para la demo
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=demo_time * 60,
-            number={'suffix': "s", 'font': {'size': 40}},
-            gauge={
-                'axis': {'range': [0, demo_time * 60], 'visible': False},
-                'bar': {'color': get_phase_color(demo_phase)},
-                'steps': [{'range': [0, demo_time * 60], 'color': theme['circle_bg']}]
-            },
-            domain={'x': [0, 1], 'y': [0, 1]},
-            title={'text': f"{demo_phase} - {format_time(demo_time * 60)}", 'font': {'size': 24}}
-        ))
-        fig.update_layout(height=300, margin=dict(l=10, r=10, t=80, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Sección de información adicional
-        st.divider()
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("¿Qué es Pomodoro?")
-            st.markdown("""
-            La Técnica Pomodoro es un método de gestión del tiempo que:
-            - Divide el trabajo en intervalos de 25 minutos
-            - Separa cada intervalo con breves descansos
-            - Mejora la concentración y productividad
-            - Reduce la fatiga mental
-            """)
-        
-        with col2:
-            st.subheader("Beneficios Clave")
-            st.markdown("""
-            - ✅ Mayor enfoque en las tareas
-            - ⏱️ Mejor gestión del tiempo
-            - 📈 Seguimiento de tu progreso
-            - 🧠 Menos estrés y fatiga
-            """)
-        
-        # Footer
-        st.divider()
-        st.markdown("""
-        <div style="text-align: center; color: #666; font-size: 0.9em;">
-        Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
-        </div>
-        """, unsafe_allow_html=True)
+        show_guest_content()
 
+def show_guest_content():
+    """Muestra el contenido para usuarios no autenticados"""
+    st.title("🍅 Pomodoro Pro")
+    st.markdown("""
+    ### ¡Bienvenido a Pomodoro Pro!
+    
+    Para comenzar:
+    1. Crea una cuenta o inicia sesión en la barra lateral
+    2. Configura tus tiempos preferidos
+    3. Comienza a mejorar tu productividad
+    
+    **Características:**
+    - Temporizador Pomodoro personalizable
+    - Gestión de tareas y proyectos
+    - Seguimiento de tu progreso
+    - Estadísticas detalladas
+    - Almacenamiento en la nube
+    - Perfil de usuario personalizable
+    """)
+    
+    # Sección de demostración
+    st.divider()
+    st.subheader("Demostración del Temporizador")
+    
+    # Mostrar un temporizador de ejemplo (solo visualización)
+    demo_time = st.slider("Tiempo de demostración (minutos)", 1, 60, 25)
+    demo_phase = st.selectbox("Fase de demostración", ["Trabajo", "Descanso Corto", "Descanso Largo"])
+    
+    # Visualización del temporizador de demo
+    theme = THEMES['Claro']  # Usar tema claro para la demo
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=demo_time * 60,
+        number={'suffix': "s", 'font': {'size': 40}},
+        gauge={
+            'axis': {'range': [0, demo_time * 60], 'visible': False},
+            'bar': {'color': get_phase_color(demo_phase)},
+            'steps': [{'range': [0, demo_time * 60], 'color': theme['circle_bg']}]
+        },
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': f"{demo_phase} - {format_time(demo_time * 60)}", 'font': {'size': 24}}
+    ))
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=80, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Sección de información adicional
+    st.divider()
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("¿Qué es Pomodoro?")
+        st.markdown("""
+        La Técnica Pomodoro es un método de gestión del tiempo que:
+        - Divide el trabajo en intervalos de 25 minutos
+        - Separa cada intervalo con breves descansos
+        - Mejora la concentración y productividad
+        - Reduce la fatiga mental
+        """)
+    
+    with col2:
+        st.subheader("Beneficios Clave")
+        st.markdown("""
+        - ✅ Mayor enfoque en las tareas
+        - ⏱️ Mejor gestión del tiempo
+        - 📈 Seguimiento de tu progreso
+        - 🧠 Menos estrés y fatiga
+        """)
+    
+    # Footer
+    st.divider()
+    st.markdown("""
+    <div style="text-align: center; color: #666; font-size: 0.9em;">
+    Pomodoro Pro v2.1 | Desarrollado con Streamlit y Supabase | © 2023
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     # Verificar y mantener la sesión activa
