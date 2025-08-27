@@ -326,30 +326,18 @@ def get_jwt_header():
 # ==============================================
 
 def save_to_supabase():
-    """Guarda todos los datos en Supabase (versión optimizada)"""
     if not check_authentication():
-        st.error("Debes iniciar sesión para guardar datos")
         return False
     
     try:
         state = st.session_state.pomodoro_state.copy()
         username = st.session_state.username
         
-        # Configura autenticación para la solicitud
-        supabase.postgrest.auth(f"Bearer {st.session_state.get('jwt_token', '')}")
-        
-        # Prepara datos comprimiendo fechas
-        save_dict = {
-            'activities': convert_dates_to_iso(state['activities']),
-            'tasks': convert_dates_to_iso(state['tasks']),
-            # ... (otros campos igual que antes)
-            'last_updated': datetime.datetime.now().isoformat()
-        }
-        
-        # Upsert optimizado
-        response = supabase.table('users').upsert({
+        # Usar cliente de servicio para bypass RLS
+        response = supabase_service.table('users').upsert({
             'username': username,
-            'data': save_dict
+            'data': convert_dates_to_iso(state),
+            'last_updated': datetime.datetime.now().isoformat()
         }).execute()
         
         st.success("Datos guardados correctamente!")
