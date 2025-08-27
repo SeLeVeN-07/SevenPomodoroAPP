@@ -307,10 +307,15 @@ def determine_next_phase(was_work):
 # Funciones de importación/exportación con Supabase
 # ==============================================
 
-def save_to_supabase(username):
+def save_to_supabase():
     """Guarda todos los datos en Supabase"""
+    if not check_authentication():
+        st.error("Debes iniciar sesión para guardar datos")
+        return False
+    
     try:
         state = st.session_state.pomodoro_state.copy()
+        username = st.session_state.username
         
         # Preparar datos para guardar
         save_dict = {
@@ -345,9 +350,14 @@ def save_to_supabase(username):
         st.error(f"Error al guardar datos: {str(e)}")
         return False
 
-def load_from_supabase(username):
+def load_from_supabase():
     """Carga datos desde Supabase"""
+    if not check_authentication():
+        st.error("Debes iniciar sesión para cargar datos")
+        return False
+    
     try:
+        username = st.session_state.username
         # Obtener datos de Supabase
         response = supabase.table('user_data').select('data').eq('username', username).execute()
         
@@ -383,7 +393,6 @@ def load_from_supabase(username):
     except Exception as e:
         st.error(f"Error al cargar datos: {str(e)}")
         return False
-
 # Mantén las funciones de export/import originales como respaldo
 def export_data():
     """Exporta todos los datos a un JSON comprimido (backup local)"""
@@ -1500,9 +1509,32 @@ def sidebar():
     with st.sidebar:
         st.title("Pomodoro Pro 🍅")
         
-        # Selector de usuario
-        st.subheader("👤 Usuario")
-        username = st.text_input("Nombre de usuario", key="username_input")
+        # Mostrar sección de autenticación
+    auth_section()
+    
+    if not check_authentication():
+        return
+    
+    state = st.session_state.pomodoro_state
+
+    with st.sidebar:
+        st.title("Pomodoro Pro 🍅")
+        
+        # Navegación por pestañas
+        st.subheader("Navegación")
+        tabs = st.radio("Selecciona una sección:", 
+                       ["🍅 Temporizador", "📊 Estadísticas", "📋 Tareas", 
+                        "🏆 Logros", "⚙️ Configuración", "ℹ️ Info"],
+                       key='sidebar_nav')
+
+        # Mostrar alertas
+        check_alerts()
+
+        # Características de estudio
+        st.subheader("🎓 Modo Estudio")
+        state['study_mode'] = st.checkbox("Activar modo estudio", 
+                                        value=state['study_mode'], 
+                                        key="study_mode")
         
         col1, col2 = st.columns(2)
         with col1:
@@ -1520,12 +1552,6 @@ def sidebar():
                 else:
                     st.error("Por favor, ingresa un nombre de usuario")
 
-        # Navegación por pestañas
-        st.subheader("Navegación")
-        tabs = st.radio("Selecciona una sección:", 
-                       ["🍅 Temporizador", "📊 Estadísticas", "📋 Tareas", 
-                        "🏆 Logros", "⚙️ Configuración", "ℹ️ Info"],
-                       key='sidebar_nav')
 
         # Mostrar alertas
         check_alerts()
@@ -1543,6 +1569,11 @@ def sidebar():
 def main():
     # Barra lateral
     sidebar()
+    
+    # Verificar autenticación - si no está autenticado, no mostrar el contenido principal
+    if not check_authentication():
+        st.warning("Por favor inicia sesión o regístrate para acceder a Pomodoro Pro")
+        return
 
     # Obtener la pestaña seleccionada usando el key único
     selected_tab = st.session_state.sidebar_nav
