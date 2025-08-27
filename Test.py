@@ -243,10 +243,10 @@ def login_user(username, password):
     """Autentica un usuario (versión mejorada)"""
     try:
         # Obtener usuario usando single() para evitar arrays vacíos
-        response = supabase.table('users')
-            .select('*')
-            .eq('username', username)
-            .single()
+        response = supabase.table('users') \
+            .select('*') \
+            .eq('username', username) \
+            .single() \
             .execute()
         
         user = response.data
