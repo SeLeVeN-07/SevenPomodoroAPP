@@ -1501,11 +1501,21 @@ def check_alerts():
             elif days_remaining < 0:
                 alerts.append(f"❌ Vencida hace {-days_remaining}d: {task.get('name', 'Tarea sin nombre')}")
     
+    # 2. Verificar si hay sesiones de trabajo completadas recientemente
+    if state.get('session_history'):
+        last_session = state['session_history'][-1]
+        session_date = datetime.datetime.strptime(last_session['Fecha'], "%Y-%m-%d").date()
+        if (today - session_date).days == 0:
+            alerts.append(f"✅ Hoy completaste {last_session['Tiempo Activo (min)']} minutos de trabajo")
+    
     # Mostrar alertas si las hay
     if alerts:
         st.sidebar.subheader("🔔 Alertas")
         for alert in alerts:
-            st.sidebar.warning(alert)
+            st.sidebar.warning(alert, icon="⚠️")
+    else:
+        st.sidebar.subheader("🔔 Alertas")
+        st.sidebar.info("No hay alertas en este momento")
 
 def sidebar():
     """Muestra la barra lateral con navegación y controles"""
@@ -1520,6 +1530,9 @@ def sidebar():
     with st.sidebar:
         st.title("Pomodoro Pro 🍅")
         
+        # Mostrar alertas
+        check_alerts()
+        
         # Navegación por pestañas
         st.subheader("Navegación")
         tabs = st.radio("Selecciona una sección:", 
@@ -1527,8 +1540,7 @@ def sidebar():
                         "🏆 Logros", "⚙️ Configuración", "ℹ️ Info"],
                        key='sidebar_nav')
 
-        # Mostrar alertas
-        check_alerts()
+        
 
         # Características de estudio
         st.subheader("🎓 Modo Estudio")
