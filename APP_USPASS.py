@@ -1,6 +1,7 @@
+
 # -*- coding: utf-8 -*-
 """
-Pomodoro Pro - Streamlit Cloud Version con Supabase
+Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
 """
 import streamlit as st
 import pandas as pd
@@ -20,6 +21,7 @@ import gzip
 import re
 from collections import defaultdict
 from supabase import create_client, Client
+import hashlib
 
 # Configuración de Supabase (reemplaza con tus propias credenciales)
 SUPABASE_URL = "https://zgvptomznuswsipfihho.supabase.co"
@@ -31,6 +33,106 @@ def init_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 supabase = init_supabase()
+# ==============================================
+# Funciones de autenticación y seguridad
+# ==============================================
+
+def hash_password(password):
+    """Hashea la contraseña usando SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def register_user(username, password):
+    """Registra un nuevo usuario en Supabase"""
+    try:
+        # Verificar si el usuario ya existe
+        response = supabase.table('users').select('username').eq('username', username).execute()
+        
+        if response.data:
+            return False, "El nombre de usuario ya existe"
+        
+        # Crear nuevo usuario
+        hashed_pw = hash_password(password)
+        response = supabase.table('users').insert({
+            'username': username,
+            'password_hash': hashed_pw
+        }).execute()
+        
+        return True, "Usuario registrado exitosamente"
+    except Exception as e:
+        return False, f"Error al registrar usuario: {str(e)}"
+
+def login_user(username, password):
+    """Autentica un usuario"""
+    try:
+        # Obtener usuario de la base de datos
+        response = supabase.table('users').select('*').eq('username', username).execute()
+        
+        if not response.data:
+            return False, "Usuario no encontrado"
+        
+        user_data = response.data[0]
+        hashed_pw = hash_password(password)
+        
+        if user_data['password_hash'] == hashed_pw:
+            return True, "Inicio de sesión exitoso"
+        else:
+            return False, "Contraseña incorrecta"
+    except Exception as e:
+        return False, f"Error al iniciar sesión: {str(e)}"
+
+def check_authentication():
+    """Verifica si el usuario está autenticado"""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'username' not in st.session_state:
+        st.session_state.username = None
+    return st.session_state.authenticated
+
+def auth_section():
+    """Muestra la sección de autenticación en la barra lateral"""
+    with st.sidebar:
+        if not check_authentication():
+            st.title("🔒 Autenticación")
+            
+            tab1, tab2 = st.tabs(["Iniciar Sesión", "Registrarse"])
+            
+            with tab1:
+                login_username = st.text_input("Usuario (Login)")
+                login_password = st.text_input("Contraseña (Login)", type="password")
+                
+                if st.button("Iniciar Sesión"):
+                    success, message = login_user(login_username, login_password)
+                    if success:
+                        st.session_state.authenticated = True
+                        st.session_state.username = login_username
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
+            
+            with tab2:
+                reg_username = st.text_input("Usuario (Registro)")
+                reg_password = st.text_input("Contraseña (Registro)", type="password")
+                
+                if st.button("Crear Cuenta"):
+                    if len(reg_username) < 3:
+                        st.error("El nombre de usuario debe tener al menos 3 caracteres")
+                    elif len(reg_password) < 6:
+                        st.error("La contraseña debe tener al menos 6 caracteres")
+                    else:
+                        success, message = register_user(reg_username, reg_password)
+                        if success:
+                            st.success(message)
+                        else:
+                            st.error(message)
+        else:
+            st.title(f"👤 {st.session_state.username}")
+            if st.button("Cerrar Sesión"):
+                st.session_state.authenticated = False
+                st.session_state.username = None
+                st.session_state.pomodoro_state = get_default_state()
+                st.success("Sesión cerrada exitosamente")
+                st.rerun()
 
 # ==============================================
 # Funciones de serialización/deserialización de fechas
