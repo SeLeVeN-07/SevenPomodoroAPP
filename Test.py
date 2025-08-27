@@ -322,11 +322,12 @@ def get_jwt_header():
     }
 
 # ==============================================
-# Funciones de importación/exportación con Supabase
+# Funciones de importación/exportación con Supabase (CORREGIDAS)
 # ==============================================
 
 def save_to_supabase():
     if not check_authentication():
+        st.error("Debes iniciar sesión para guardar datos")
         return False
     
     try:
@@ -347,25 +348,27 @@ def save_to_supabase():
         return False
 
 def load_from_supabase():
-    """Carga datos desde Supabase (versión optimizada)"""
+    """Carga datos desde Supabase (versión corregida)"""
     if not check_authentication():
         st.error("Debes iniciar sesión para cargar datos")
         return False
     
     try:
         username = st.session_state.username
-        supabase.postgrest.auth(f"Bearer {st.session_state.get('jwt_token', '')}")
         
-        # Query optimizada
-        response = supabase.table('users') \
+        # Usar cliente de servicio para bypass RLS
+        response = supabase_service.table('users') \
             .select('data') \
             .eq('username', username) \
-            .single() \
             .execute()
         
-        imported_data = convert_iso_to_dates(response.data['data'])
+        if not response.data:
+            st.warning("No se encontraron datos para este usuario")
+            return False
+            
+        imported_data = convert_iso_to_dates(response.data[0]['data'])
         
-        # Actualiza el estado (versión más segura)
+        # Actualiza el estado
         state_fields = ['activities', 'tasks', 'projects', 'achievements', 'session_history']
         for field in state_fields:
             if field in imported_data:
