@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Pomodoro Pro - Versión Mejorada con Soporte para Nombre de Usuario
+Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
 """
 import streamlit as st
 import pandas as pd
@@ -17,15 +17,32 @@ import json
 import base64
 import io
 import gzip
+import re
 from collections import defaultdict
 from supabase import create_client, Client
-import os
-import re
-import logging
+import hashlib
 
-# Configuración de logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Configuración de Supabase (usa Service Role Key para registro)
+SUPABASE_URL = "https://zgvptomznuswsipfihho.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTAxNjYsImV4cCI6MjA3MTg4NjE2Nn0.Kk9qB8BKxIV7CgLZQdWW568MSpMjYtbceLQDfJvwttk"
+SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjMxMDE2NiwiZXhwIjoyMDcxODg2MTY2fQ.pXOv9xlz-xh8p572WEP1xVYN5Wa20cnLsg-x2IvuVNQ"  # Reemplaza con tu Service Role Key
+
+# Inicializar cliente de Supabase para operaciones normales
+@st.cache_resource
+def init_supabase():
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+# Cliente especial para operaciones que necesitan bypass RLS (como registro)
+@st.cache_resource
+def init_supabase_service():
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+supabase = init_supabase()
+supabase_service = init_supabase_service()
+
+# ==============================================
+# Configuración inicial y constantes
+# ==============================================
 
 # Configuración de la página
 st.set_page_config(
@@ -35,27 +52,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Configuración de Supabase (usar variables de entorno en producción)
-SUPABASE_URL = os.getenv('SUPABASE_URL', "https://puyhhnglmjjpzzlpltkj.supabase.co")
-SUPABASE_KEY = os.getenv('SUPABASE_KEY', "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB1eWhobmdsbWpqcHp6bHBsdGtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYyMjgxMDIsImV4cCI6MjA3MTgwNDEwMn0.AEnoGRTO0Ex0tQU1r-oUkolpjf85t4mGTCrLG86sgow")
-
-# Inicializar cliente Supabase con manejo de errores
-@st.cache_resource
-def init_supabase():
-    try:
-        client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        # Verificar conexión
-        client.table('user_data').select('*').limit(1).execute()
-        logger.info("Conexión a Supabase establecida correctamente")
-        return client
-    except Exception as e:
-        logger.error(f"Error al conectar con Supabase: {str(e)}")
-        st.error(f"Error al conectar con la base de datos: {str(e)}")
-        return None
-
-supabase = init_supabase()
-
-# Constantes y configuración
+# Constantes
 THEMES = {
     'Claro': {
         'bg': '#ffffff', 'fg': '#000000', 'circle_bg': '#e0e0e0',
@@ -87,8 +84,12 @@ THEMES = {
     }
 }
 
-# Estado por defecto
+# ==============================================
+# Funciones de inicialización y utilidades
+# ==============================================
+
 def get_default_state():
+    """Devuelve el estado por defecto de la aplicación"""
     return {
         'work_duration': 45 * 60,
         'short_break': 20 * 60,
@@ -128,267 +129,17 @@ def get_default_state():
         'dragging_item': None,
         'drag_type': None,
         'drag_source': None,
-        'session_history': [],
-        'username': "",  # Nuevo campo para nombre de usuario
-        'display_name': ""  # Nuevo campo para nombre para mostrar
+        'session_history': []
     }
 
-# ==============================================
-# Funciones de autenticación y almacenamiento
-# ==============================================
-
-def validate_email(email):
-    """Valida el formato de un email"""
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    return re.match(pattern, email) is not None
-
-def validate_username(username):
-    """Valida el formato de un nombre de usuario"""
-    if not username:
-        return False
-    # Permitir letras, números, guiones y guiones bajos, entre 3 y 20 caracteres
-    pattern = r'^[a-zA-Z0-9_-]{3,20}$'
-    return re.match(pattern, username) is not None
-
-def auth_section():
-    """Maneja la autenticación del usuario"""
-    if 'user' not in st.session_state:
-        st.session_state.user = None
-    
-    if not st.session_state.user:
-        tab1, tab2 = st.tabs(["Iniciar Sesión", "Registrarse"])
-        
-        with tab1:
-            with st.form("login_form"):
-                email = st.text_input("Correo electrónico")
-                password = st.text_input("Contraseña", type="password")
-                
-                if st.form_submit_button("Ingresar"):
-                    if not email or not password:
-                        st.error("Por favor completa todos los campos")
-                    elif not validate_email(email):
-                        st.error("Por favor ingresa un email válido")
-                    else:
-                        try:
-                            user = supabase.auth.sign_in_with_password({
-                                "email": email,
-                                "password": password
-                            })
-                            st.session_state.user = user
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error al iniciar sesión: {str(e)}")
-        
-        with tab2:
-            with st.form("signup_form"):
-                new_email = st.text_input("Correo electrónico (registro)")
-                new_password = st.text_input("Contraseña (registro)", type="password")
-                confirm_password = st.text_input("Confirmar contraseña", type="password")
-                username = st.text_input("Nombre de usuario")
-                display_name = st.text_input("Nombre para mostrar (opcional)")
-                
-                if st.form_submit_button("Crear cuenta"):
-                    if not new_email or not new_password or not confirm_password or not username:
-                        st.error("Por favor completa todos los campos obligatorios")
-                    elif not validate_email(new_email):
-                        st.error("Por favor ingresa un email válido")
-                    elif not validate_username(username):
-                        st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
-                    elif new_password != confirm_password:
-                        st.error("Las contraseñas no coinciden")
-                    else:
-                        try:
-                            user = supabase.auth.sign_up({
-                                "email": new_email,
-                                "password": new_password
-                            })
-                            
-                            # Crear perfil de usuario con nombre de usuario
-                            if user:
-                                user_id = user.user.id
-                                supabase.table('user_profiles').insert({
-                                    'user_id': user_id,
-                                    'email': new_email,
-                                    'username': username,
-                                    'display_name': display_name or username,
-                                    'created_at': datetime.datetime.now().isoformat()
-                                }).execute()
-                            
-                            st.success("¡Cuenta creada! Por favor inicia sesión.")
-                        except Exception as e:
-                            st.error(f"Error al registrar: {str(e)}")
-    else:
-        if st.sidebar.button("Cerrar sesión"):
-            supabase.auth.sign_out()
-            st.session_state.user = None
-            st.session_state.pomodoro_state = None
-            st.rerun()
-
-def save_user_data():
-    """Guarda los datos del usuario en Supabase"""
-    if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
-        try:
-            user_id = st.session_state.user.user.id
-            data = st.session_state.pomodoro_state.copy()  # Hacer una copia para no modificar el original
-            
-            # Función recursiva para convertir datetime a string
-            def convert_datetime(obj):
-                if isinstance(obj, (datetime.datetime, datetime.date)):
-                    return obj.isoformat()
-                elif isinstance(obj, list):
-                    return [convert_datetime(item) for item in obj]
-                elif isinstance(obj, dict):
-                    return {key: convert_datetime(value) for key, value in obj.items()}
-                return obj
-            
-            # Convertir todos los datetime en los datos
-            serialized_data = convert_datetime(data)
-            
-            # Usamos upsert para crear o actualizar el registro
-            response = supabase.table('user_data').upsert({
-                'user_id': user_id,
-                'email': st.session_state.user.user.email,
-                'pomodoro_data': serialized_data,
-                'last_updated': datetime.datetime.now().isoformat()
-            }).execute()
-            
-            if not hasattr(st.session_state, 'last_saved'):
-                st.session_state.last_saved = datetime.datetime.now()
-            
-            return True
-        except Exception as e:
-            st.error(f"Error al guardar datos: {str(e)}")
-            return False
-
-def load_user_data():
-    """Carga los datos del usuario desde Supabase"""
-    if 'user' in st.session_state and st.session_state.user:
-        try:
-            user_id = st.session_state.user.user.id
-            response = supabase.table('user_data').select('*').eq('user_id', user_id).execute()
-            
-            if response.data:
-                data = response.data[0]['pomodoro_data']
-                
-                # Función para convertir strings ISO a datetime
-                def parse_datetime(obj):
-                    if isinstance(obj, str):
-                        try:
-                            return datetime.datetime.fromisoformat(obj)
-                        except ValueError:
-                            try:
-                                return datetime.date.fromisoformat(obj)
-                            except ValueError:
-                                return obj
-                    elif isinstance(obj, list):
-                        return [parse_datetime(item) for item in obj]
-                    elif isinstance(obj, dict):
-                        return {key: parse_datetime(value) for key, value in obj.items()}
-                    return obj
-                
-                return parse_datetime(data)
-        except Exception as e:
-            st.error(f"Error al cargar datos: {str(e)}")
-    return None
-
-def load_user_profile():
-    """Carga el perfil del usuario desde Supabase"""
-    if 'user' in st.session_state and st.session_state.user:
-        try:
-            user_id = st.session_state.user.user.id
-            response = supabase.table('user_profiles').select('*').eq('user_id', user_id).execute()
-            
-            if response.data:
-                return response.data[0]
-        except Exception as e:
-            st.error(f"Error al cargar perfil: {str(e)}")
-    return None
-
-def auto_save():
-    """Guarda automáticamente cada 30 segundos si hay cambios"""
-    if 'user' in st.session_state and st.session_state.user and 'pomodoro_state' in st.session_state:
-        try:
-            if 'last_saved' not in st.session_state or \
-               (datetime.datetime.now() - st.session_state.last_saved).seconds > 30:
-                if save_user_data():
-                    st.session_state.last_saved = datetime.datetime.now()
-                    st.toast("Datos guardados automáticamente", icon="💾")
-        except Exception as e:
-            logger.error(f"Error en guardado automático: {str(e)}")
-
-def backup_local_data():
-    """Crea una copia de seguridad local de los datos"""
-    if 'pomodoro_state' in st.session_state:
-        try:
-            with open('local_backup.json', 'w') as f:
-                # Convertir datetime a string antes de guardar
-                def default_serializer(obj):
-                    if isinstance(obj, (datetime.datetime, datetime.date)):
-                        return obj.isoformat()
-                    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-                
-                json.dump(st.session_state.pomodoro_state, f, default=default_serializer, indent=2)
-        except Exception as e:
-            logger.error(f"Error al crear backup local: {str(e)}")
-
-def restore_local_data():
-    """Restaura datos desde una copia de seguridad local"""
-    try:
-        with open('local_backup.json', 'r') as f:
-            data = json.load(f)
-            
-            # Convertir strings ISO a datetime
-            def parse_datetime(obj):
-                if isinstance(obj, str):
-                    try:
-                        return datetime.datetime.fromisoformat(obj)
-                    except ValueError:
-                        try:
-                            return datetime.date.fromisoformat(obj)
-                        except ValueError:
-                            return obj
-                elif isinstance(obj, list):
-                    return [parse_datetime(item) for item in obj]
-                elif isinstance(obj, dict):
-                    return {key: parse_datetime(value) for key, value in obj.items()}
-                return obj
-            
-            return parse_datetime(data)
-    except:
-        return None
-
-def check_session():
-    """Verifica si la sesión del usuario sigue siendo válida"""
-    if 'user' in st.session_state and st.session_state.user:
-        try:
-            # Verificar token con Supabase
-            user = supabase.auth.get_user()
-            if not user:
-                st.session_state.user = None
-                st.rerun()
-        except:
-            st.session_state.user = None
-            st.rerun()
-
-# ==============================================
-# Funciones auxiliares
-# ==============================================
-
 def format_time(seconds):
-    """
-    Convierte segundos a formato MM:SS
-    
-    Args:
-        seconds (int): Tiempo en segundos
-        
-    Returns:
-        str: Tiempo formateado como MM:SS
-    """
+    """Formatea segundos a formato MM:SS"""
     mins = int(seconds // 60)
     secs = int(seconds % 60)
     return f"{mins:02d}:{secs:02d}"
 
 def get_phase_color(phase):
+    """Devuelve el color correspondiente a cada fase"""
     colors = {
         "Trabajo": '#e74c3c',
         'Descanso Corto': '#2ecc71',
@@ -397,6 +148,7 @@ def get_phase_color(phase):
     return colors.get(phase, "#e74c3c")
 
 def get_phase_duration(phase):
+    """Devuelve la duración de cada fase"""
     state = st.session_state.pomodoro_state
     if phase == "Trabajo":
         return state['work_duration']
@@ -408,6 +160,7 @@ def get_phase_duration(phase):
         return state['work_duration']  # Valor por defecto
 
 def determine_next_phase(was_work):
+    """Determina la siguiente fase basándose en el estado actual"""
     state = st.session_state.pomodoro_state
     if not was_work:
         return "Trabajo"
@@ -417,33 +170,292 @@ def determine_next_phase(was_work):
         return "Descanso Largo"
     return "Descanso Corto"
 
-def parse_date(date_input):
-    """Convierte diferentes formatos de fecha a objeto date"""
-    if isinstance(date_input, date):
-        return date_input
-    if isinstance(date_input, datetime.datetime):
-        return date_input.date()
-    if isinstance(date_input, str):
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, (datetime.datetime, date)):
+        return obj.isoformat()
+    raise TypeError("Type %s not serializable" % type(obj))
+
+# ==============================================
+# Funciones de serialización/deserialización de fechas
+# ==============================================
+
+def convert_dates_to_iso(obj):
+    """
+    Recursively convert all date and datetime objects in the data to ISO strings.
+    """
+    if isinstance(obj, (date, datetime.datetime)):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: convert_dates_to_iso(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_dates_to_iso(element) for element in obj]
+    else:
+        return obj
+
+def convert_iso_to_dates(obj):
+    """
+    Recursively convert all ISO date strings in the data to date or datetime objects.
+    """
+    if isinstance(obj, str):
+        # Check if the string matches a date pattern
         try:
-            return datetime.datetime.strptime(date_input, "%Y-%m-%d").date()
-        except ValueError:
-            try:
-                return datetime.datetime.strptime(date_input, "%d/%m/%Y").date()
-            except ValueError:
-                return None
-    return None
+            # For date strings (YYYY-MM-DD)
+            if re.match(r'^\d{4}-\d{2}-\d{2}$', obj):
+                return datetime.datetime.strptime(obj, '%Y-%m-%d').date()
+            # For datetime strings (YYYY-MM-DDTHH:MM:SS or with microseconds and timezone)
+            elif re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', obj):
+                # Try parsing with datetime
+                return datetime.datetime.fromisoformat(obj.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            pass
+        return obj
+    elif isinstance(obj, dict):
+        return {k: convert_iso_to_dates(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_iso_to_dates(element) for element in obj]
+    else:
+        return obj
+
+# ==============================================
+# Funciones de autenticación y seguridad (VERSIÓN CORREGIDA)
+# ==============================================
+
+def hash_password(password):
+    """Hashea la contraseña usando SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def register_user(username, password):
+    """Registra un nuevo usuario en Supabase usando service role key"""
+    try:
+        # Verificar si el usuario ya existe usando el cliente de servicio
+        response = supabase_service.table('users').select('username').eq('username', username).execute()
+        
+        if response.data:
+            return False, "El nombre de usuario ya existe"
+        
+        # Crear nuevo usuario con data inicializada
+        hashed_pw = hash_password(password)
+        response = supabase_service.table('users').insert({
+            'username': username,
+            'password_hash': hashed_pw,
+            'data': convert_dates_to_iso(get_default_state())
+        }).execute()
+        
+        return True, "Usuario registrado exitosamente"
+    except Exception as e:
+        return False, f"Error al registrar usuario: {str(e)}"
+
+def login_user(username, password):
+    """Autentica un usuario (versión corregida)"""
+    try:
+        # Usar el cliente de servicio para bypass RLS
+        response = supabase_service.table('users') \
+            .select('*') \
+            .eq('username', username) \
+            .execute()
+        
+        if not response.data:
+            return False, "Usuario no encontrado"
+            
+        user = response.data[0]
+        hashed_pw = hash_password(password)
+        
+        if user['password_hash'] == hashed_pw:
+            st.session_state.authenticated = True
+            st.session_state.username = username
+            return True, "Inicio de sesión exitoso"
+        return False, "Contraseña incorrecta"
+    except Exception as e:
+        return False, f"Error al iniciar sesión: {str(e)}"
+
+def check_authentication():
+    """Verifica si el usuario está autenticado"""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'username' not in st.session_state:
+        st.session_state.username = None
+    return st.session_state.authenticated
+
+def auth_section():
+    """Muestra la sección de autenticación"""
+    with st.sidebar:
+        if not check_authentication():
+            st.title("🔒 Autenticación")
+            
+            tab1, tab2 = st.tabs(["Iniciar Sesión", "Registrarse"])
+            
+            with tab1:
+                with st.form("login_form"):
+                    username = st.text_input("Usuario")
+                    password = st.text_input("Contraseña", type="password")
+                    
+                    if st.form_submit_button("Iniciar Sesión"):
+                        success, message = login_user(username, password)
+                        if success:
+                            load_from_supabase()  # Carga datos tras login
+                            st.rerun()
+                        st.error(message if not success else "")
+            
+            with tab2:
+                with st.form("register_form"):
+                    new_user = st.text_input("Nuevo usuario")
+                    new_pass = st.text_input("Nueva contraseña", type="password")
+                    
+                    if st.form_submit_button("Registrarse"):
+                        if len(new_user) < 3:
+                            st.error("Usuario muy corto (mín. 3 caracteres)")
+                        elif len(new_pass) < 6:
+                            st.error("Contraseña muy corta (mín. 6 caracteres)")
+                        else:
+                            success, message = register_user(new_user, new_pass)
+                            if success:
+                                st.session_state.authenticated = True
+                                st.session_state.username = new_user
+                                st.rerun()
+                            st.error(message if not success else "")
+
+# ==============================================
+# Funciones de importación/exportación con Supabase (VERSIÓN CORREGIDA)
+# ==============================================
+
+def save_to_supabase():
+    if not check_authentication():
+        st.error("Debes iniciar sesión para guardar datos")
+        return False
+    
+    try:
+        state = st.session_state.pomodoro_state.copy()
+        username = st.session_state.username
+        
+        # Usar UPDATE en lugar de UPSERT para no afectar password_hash
+        response = supabase_service.table('users').update({
+            'data': convert_dates_to_iso(state),
+            'last_updated': datetime.datetime.now().isoformat()
+        }).eq('username', username).execute()
+        
+        st.success("Datos guardados correctamente!")
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar: {str(e)}")
+        return False
+
+def load_from_supabase():
+    """Carga datos desde Supabase"""
+    if not check_authentication():
+        st.error("Debes iniciar sesión para cargar datos")
+        return False
+    
+    try:
+        username = st.session_state.username
+        
+        # Usar cliente de servicio para bypass RLS
+        response = supabase_service.table('users') \
+            .select('data') \
+            .eq('username', username) \
+            .execute()
+        
+        if not response.data:
+            st.warning("No se encontraron datos para este usuario")
+            return False
+            
+        imported_data = convert_iso_to_dates(response.data[0]['data'])
+        
+        # Actualiza el estado
+        state_fields = ['activities', 'tasks', 'projects', 'achievements', 'session_history']
+        for field in state_fields:
+            if field in imported_data:
+                st.session_state.pomodoro_state[field] = imported_data[field]
+        
+        st.success("Datos cargados correctamente!")
+        return True
+    except Exception as e:
+        st.warning(f"No se encontraron datos o error: {str(e)}")
+        return False
+
+# Elimina completamente la función get_jwt_header ya que no la necesitas
+
+# Mantén las funciones de export/import originales como respaldo
+def export_data():
+    """Exporta todos los datos a un JSON comprimido (backup local)"""
+    state = st.session_state.pomodoro_state.copy()
+    
+    # Preparar datos para exportación
+    export_dict = {
+        'activities': state['activities'],
+        'tasks': state['tasks'],
+        'completed_tasks': state['completed_tasks'],
+        'projects': state['projects'],
+        'achievements': state['achievements'],
+        'session_history': state['session_history'],
+        'settings': {
+            'work_duration': state['work_duration'],
+            'short_break': state['short_break'],
+            'long_break': state['long_break'],
+            'sessions_before_long': state['sessions_before_long'],
+            'total_sessions': state['total_sessions'],
+            'current_theme': state['current_theme']
+        }
+    }
+    
+    # Convertir fechas a formato ISO
+    export_dict = convert_dates_to_iso(export_dict)
+    
+    # Convertir a JSON y comprimir
+    json_str = json.dumps(export_dict, indent=2, ensure_ascii=False, default=json_serial)
+    compressed = gzip.compress(json_str.encode('utf-8'))
+    
+    # Crear archivo descargable
+    b64 = base64.b64encode(compressed).decode()
+    href = f'<a href="data:application/gzip;base64,{b64}" download="pomodoro_backup.json.gz">Descargar backup</a>'
+    st.markdown(href, unsafe_allow_html=True)
+
+def import_data(uploaded_file):
+    """Importa datos desde un archivo JSON comprimido (backup local)"""
+    try:
+        # Descomprimir y cargar
+        compressed = uploaded_file.read()
+        json_str = gzip.decompress(compressed).decode('utf-8')
+        imported_data = json.loads(json_str)
+        
+        # Convertir cadenas ISO a objetos fecha
+        imported_data = convert_iso_to_dates(imported_data)
+        
+        # Actualizar estado
+        state = st.session_state.pomodoro_state
+        state['activities'] = imported_data.get('activities', [])
+        state['tasks'] = imported_data.get('tasks', [])
+        state['completed_tasks'] = imported_data.get('completed_tasks', [])
+        state['projects'] = imported_data.get('projects', [])
+        state['achievements'] = imported_data.get('achievements', state['achievements'])
+        state['session_history'] = imported_data.get('session_history', [])
+        
+        # Configuración
+        settings = imported_data.get('settings', {})
+        state['work_duration'] = settings.get('work_duration', 25*60)
+        state['short_break'] = settings.get('short_break', 5*60)
+        state['long_break'] = settings.get('long_break', 15*60)
+        state['sessions_before_long'] = settings.get('sessions_before_long', 4)
+        state['total_sessions'] = settings.get('total_sessions', 8)
+        state['current_theme'] = settings.get('current_theme', 'Claro')
+        
+        st.success("Datos importados correctamente!")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Error al importar datos: {str(e)}")
 
 # ==============================================
 # Funciones de registro de sesiones
 # ==============================================
 
 def log_session():
+    """Registra una sesión completada en el historial"""
     state = st.session_state.pomodoro_state
     if state['total_active_time'] >= 0.1:
         minutes = round(state['total_active_time'] / 60, 2)
         log_entry = {
-            'Fecha': datetime.datetime.now().date().isoformat(),  # Convertir a string
-            'Hora Inicio': (state['start_time'] or datetime.datetime.now()).strftime("%H:%M:%S"),
+            'Fecha': datetime.datetime.now().strftime("%Y-%m-%d"),
+            'Hora Inicio': state['start_time'].strftime("%H:%M:%S") if state['start_time'] else datetime.datetime.now().strftime("%H:%M:%S"),
             'Tiempo Activo (min)': minutes,
             'Actividad': state['current_activity'],
             'Proyecto': state['current_project'],
@@ -452,10 +464,6 @@ def log_session():
         
         # Guardar en el historial de sesiones
         state['session_history'].append(log_entry)
-        
-        # Limitar el tamaño del historial
-        if len(state['session_history']) > 1000:
-            state['session_history'] = state['session_history'][-1000:]
         
         # Actualizar logros
         if state['current_phase'] == "Trabajo":
@@ -472,9 +480,6 @@ def log_session():
                 else:
                     state['achievements']['streak_days'] = 1
                 state['last_session_date'] = today
-        
-        # Guardar cambios
-        save_user_data()
 
 def analyze_data():
     """Analiza los datos del historial de sesiones"""
@@ -507,14 +512,21 @@ def analyze_data():
                 'project': project, 'task': task
             })
         except Exception as e:
-            logger.error(f"Error procesando entrada: {e}")
+            print(f"Error procesando entrada: {e}")
     return data
+
+def logout():
+    """Cierra sesión limpiando todo"""
+    st.session_state.clear()
+    st.session_state.pomodoro_state = get_default_state()
+    st.rerun()
 
 # ==============================================
 # Funciones de gestión de tareas
 # ==============================================
 
 def edit_task_modal():
+    """Muestra el modal para editar una tarea"""
     state = st.session_state.pomodoro_state
     if state.get('editing_task'):
         task = state['editing_task']
@@ -542,7 +554,7 @@ def edit_task_modal():
                 index=["Baja", "Media", "Alta", "Urgente"].index(task['priority'])
             )
             
-            new_deadline = st.date_input("Fecha límite", value=parse_date(task['deadline']) or date.today())
+            new_deadline = st.date_input("Fecha límite", value=task['deadline'])
             
             col1, col2 = st.columns(2)
             with col1:
@@ -561,7 +573,6 @@ def edit_task_modal():
                     
                     st.success("Tarea actualizada!")
                     state['editing_task'] = None
-                    save_user_data()
                     st.rerun()
             
             with col2:
@@ -570,6 +581,7 @@ def edit_task_modal():
                     st.rerun()
 
 def edit_project_modal():
+    """Muestra el modal para editar un proyecto"""
     state = st.session_state.pomodoro_state
     if state.get('editing_project'):
         project = state['editing_project']
@@ -602,7 +614,6 @@ def edit_project_modal():
                     
                     st.success("Proyecto actualizado!")
                     state['editing_project'] = None
-                    save_user_data()
                     st.rerun()
             
             with col2:
@@ -615,6 +626,7 @@ def edit_project_modal():
 # ==============================================
 
 def hierarchical_view():
+    """Muestra la vista jerárquica de actividades, proyectos y tareas"""
     state = st.session_state.pomodoro_state
     
     st.subheader("🌳 Vista Jerárquica")
@@ -639,7 +651,6 @@ def hierarchical_view():
                             'activity': new_project_activity
                         })
                         st.success("Proyecto creado!")
-                        save_user_data()
                         st.rerun()
                     else:
                         st.error("Ya existe un proyecto con ese nombre")
@@ -676,7 +687,6 @@ def hierarchical_view():
                     }
                     state['tasks'].append(new_task)
                     st.success("Tarea creada!")
-                    save_user_data()
                     st.rerun()
 
     # Mostrar estructura jerárquica
@@ -705,8 +715,7 @@ def hierarchical_view():
                             for task in project_tasks:
                                 cols = st.columns([5, 1, 1])
                                 with cols[0]:
-                                    deadline_str = task['deadline'].isoformat() if isinstance(task['deadline'], (date, datetime.datetime)) else str(task['deadline'])
-                                    st.write(f"  └ {task['name']} ({task['priority']}) - Vence: {deadline_str}")
+                                    st.write(f"  └ {task['name']} ({task['priority']}) - Vence: {task['deadline']}")
                                 with cols[1]:
                                     if st.button("✏️", key=f"edit_task_{task['name']}_{project['name']}"):
                                         state['editing_task'] = task
@@ -719,7 +728,6 @@ def hierarchical_view():
                                         state['completed_tasks'].append(task)
                                         state['achievements']['tasks_completed'] += 1
                                         st.success("Tarea completada!")
-                                        save_user_data()
                                         st.rerun()
                     
                     with col2:
@@ -733,10 +741,10 @@ def hierarchical_view():
                                     task['project'] = "Ninguno"
                             state['projects'].remove(project)
                             st.success("Proyecto eliminado!")
-                            save_user_data()
                             st.rerun()
 
 def display_filtered_tasks(filter_activity, filter_project, task_status):
+    """Muestra tareas filtradas con claves únicas para botones"""
     state = st.session_state.pomodoro_state
     
     # Aplicar filtros
@@ -747,57 +755,58 @@ def display_filtered_tasks(filter_activity, filter_project, task_status):
             continue
             
         # Filtrar por proyecto
-        if filter_project != "Todos" and task.get('project') != filter_project:
+        if filter_project != "Todos" and task['project'] != filter_project:
             continue
             
         # Filtrar por estado
-        if task_status == "Pendientes" and task.get('completed', False):
+        if task_status == "Pendientes" and task['completed']:
             continue
-        if task_status == "Completadas" and not task.get('completed', False):
+        if task_status == "Completadas" and not task['completed']:
             continue
             
         filtered_tasks.append(task)
     
-    # Mostrar tareas filtradas
+    # Mostrar tareas filtradas (VERSIÓN CORREGIDA)
     if not filtered_tasks:
         st.info("No hay tareas que coincidan con los filtros")
     else:
-        for i, task in enumerate(filtered_tasks):
+        for i, task in enumerate(filtered_tasks):  # Usar enumerate para índice único
             with st.container(border=True):
                 cols = st.columns([4, 1, 1, 1])
                 with cols[0]:
                     status = "✅ " if task['completed'] else "📝 "
-                    deadline_str = task['deadline'].isoformat() if isinstance(task['deadline'], (date, datetime.datetime)) else str(task['deadline'])
                     st.write(f"{status}**{task['name']}**")
-                    st.caption(f"Proyecto: {task['project']} | Prioridad: {task['priority']} | Vence: {deadline_str}")
+                    st.caption(f"Proyecto: {task['project']} | Prioridad: {task['priority']} | Vence: {task['deadline']}")
                 
                 with cols[1]:
-                    if st.button("✏️", key=f"edit_{i}_{task['name']}_{task['project']}"):
+                    if st.button("✏️", key=f"edit_{i}_{task['name']}_{task['project']}"):  # Clave única con índice
                         state['editing_task'] = task
                         st.rerun()
                 
                 with cols[2]:
                     if not task['completed']:
-                        if st.button("✓", key=f"complete_{i}_{task['name']}_{task['project']}"):
+                        if st.button("✓", key=f"complete_{i}_{task['name']}_{task['project']}"):  # Clave única con índice
                             task['completed'] = True
                             task['completed_date'] = date.today()
-                            state['tasks'].remove(task)
+                            # Encontrar y eliminar la tarea de la lista original
+                            for t in state['tasks']:
+                                if t['name'] == task['name'] and t['project'] == task['project']:
+                                    state['tasks'].remove(t)
+                                    break
                             state['completed_tasks'].append(task)
                             state['achievements']['tasks_completed'] += 1
                             st.success("Tarea completada!")
-                            save_user_data()
                             st.rerun()
                     else:
                         st.write("✅")
                 
                 with cols[3]:
-                    if st.button("🗑️", key=f"delete_{i}_{task['name']}_{task['project']}"):
+                    if st.button("🗑️", key=f"delete_{i}_{task['name']}_{task['project']}"):  # Clave única con índice
                         if task['completed']:
                             state['completed_tasks'].remove(task)
                         else:
                             state['tasks'].remove(task)
                         st.success("Tarea eliminada!")
-                        save_user_data()
                         st.rerun()
 
 # ==============================================
@@ -805,6 +814,7 @@ def display_filtered_tasks(filter_activity, filter_project, task_status):
 # ==============================================
 
 def timer_tab():
+    """Muestra la pestaña del temporizador Pomodoro"""
     state = st.session_state.pomodoro_state
     
     # Mostrar materia actual si está en modo estudio
@@ -824,6 +834,7 @@ def timer_tab():
                 key="current_activity"
             )
 
+    # Eliminar el campo de subactividad (ya no se usará)
     with col2:
         state['sub_activity'] = ""  # Mantener por compatibilidad pero no mostrar
 
@@ -837,7 +848,6 @@ def timer_tab():
                     'activity': state['current_activity']
                 })
                 st.success("Proyecto creado!")
-                save_user_data()
                 st.rerun()
             elif new_project_name in [p['name'] for p in state['projects']]:
                 st.error("Ya existe un proyecto con ese nombre")
@@ -888,7 +898,6 @@ def timer_tab():
                     state['tasks'].append(new_task)
                     state['current_task'] = new_task_name
                     st.success("Tarea creada!")
-                    save_user_data()
                     st.rerun()
             elif selected_task != "-- Seleccionar --":
                 state['current_task'] = selected_task
@@ -908,7 +917,6 @@ def timer_tab():
                 state['tasks'].append(new_task)
                 state['current_task'] = new_task_name
                 st.success("Tarea creada!")
-                save_user_data()
                 st.rerun()
 
     # Verificar si hay una actividad seleccionada antes de mostrar el temporizador
@@ -959,8 +967,8 @@ def timer_tab():
                 state['start_time'] = datetime.datetime.now()
                 state['total_active_time'] = 0
                 # Iniciar el temporizador
-                st.session_state.timer_start = time.monotonic()
-                st.session_state.last_update = time.monotonic()
+                st.session_state.timer_start = time.time()
+                st.session_state.last_update = time.time()
                 st.rerun()
 
     with col2:
@@ -968,14 +976,14 @@ def timer_tab():
                    use_container_width=True, disabled=not state['timer_running'], key="pause_timer"):
             if state['timer_running'] and not state['timer_paused']:
                 state['timer_paused'] = True
-                state['paused_time'] = time.monotonic()
+                state['paused_time'] = time.time()
                 st.rerun()
             elif state['timer_paused']:
                 state['timer_paused'] = False
                 # Ajustar el tiempo de inicio para compensar la pausa
-                pause_duration = time.monotonic() - state['paused_time']
+                pause_duration = time.time() - state['paused_time']
                 st.session_state.timer_start += pause_duration
-                st.session_state.last_update = time.monotonic()
+                st.session_state.last_update = time.time()
                 st.rerun()
 
     with col3:
@@ -1010,7 +1018,7 @@ def timer_tab():
 
     # Actualizar el temporizador si está en ejecución
     if state['timer_running'] and not state['timer_paused']:
-        current_time = time.monotonic()
+        current_time = time.time()
         elapsed = current_time - st.session_state.last_update
         st.session_state.last_update = current_time
 
@@ -1058,6 +1066,7 @@ def timer_tab():
 # ==============================================
 
 def stats_tab():
+    """Muestra la pestaña de estadísticas"""
     st.title("📊 Estadísticas Avanzadas")
     
     if not st.session_state.pomodoro_state['session_history']:
@@ -1099,11 +1108,6 @@ def stats_tab():
                     names=list(data['activities'].keys()),
                     title="Distribución de Actividades"
                 )
-                fig.update_layout(
-                    autosize=True,
-                    margin=dict(autoexpand=True),
-                    height=400
-                )
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No hay datos para mostrar")
@@ -1120,11 +1124,6 @@ def stats_tab():
                     values=list(project_data.values()), 
                     names=list(project_data.keys()),
                     title="Distribución por Proyecto"
-                )
-                fig.update_layout(
-                    autosize=True,
-                    margin=dict(autoexpand=True),
-                    height=400
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -1146,11 +1145,6 @@ def stats_tab():
                 daily_totals, x='date', y='minutes',
                 title="Evolución del Tiempo por Día",
                 labels={'date': 'Fecha', 'minutes': 'Minutos'}
-            )
-            fig.update_layout(
-                autosize=True,
-                margin=dict(autoexpand=True),
-                height=400
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -1181,11 +1175,6 @@ def stats_tab():
                 y=activities,
                 title="Distribución de Tiempo por Actividad y Proyecto"
             )
-            fig.update_layout(
-                autosize=True,
-                margin=dict(autoexpand=True),
-                height=500
-            )
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No hay datos suficientes para el heatmap")
@@ -1213,6 +1202,7 @@ def stats_tab():
 # ==============================================
 
 def tasks_tab():
+    """Muestra la pestaña de gestión de tareas"""
     state = st.session_state.pomodoro_state
     st.title("📋 Gestión de Tareas y Proyectos")
     
@@ -1263,6 +1253,7 @@ def tasks_tab():
 # ==============================================
 
 def show_achievements():
+    """Muestra la pestaña de logros"""
     state = st.session_state.pomodoro_state
     achievements = state['achievements']
     
@@ -1287,6 +1278,7 @@ def show_achievements():
 # ==============================================
 
 def settings_tab():
+    """Muestra la pestaña de configuración"""
     state = st.session_state.pomodoro_state
     
     st.title("⚙️ Configuración")
@@ -1323,47 +1315,9 @@ def settings_tab():
             state['sessions_before_long'] = sessions_long
             state['total_sessions'] = total_sess
             st.success("Configuración aplicada!")
-            save_user_data()
             st.rerun()
 
     with col2:
-        st.subheader("👤 Perfil de Usuario")
-        
-        # Cargar perfil de usuario
-        user_profile = load_user_profile()
-        if user_profile:
-            current_username = user_profile.get('username', '')
-            current_display_name = user_profile.get('display_name', '')
-        else:
-            current_username = ''
-            current_display_name = ''
-        
-        new_username = st.text_input("Nombre de usuario", value=current_username, key="username_input")
-        new_display_name = st.text_input("Nombre para mostrar", value=current_display_name, key="display_name_input")
-        
-        if st.button("💾 Actualizar Perfil", key="update_profile"):
-            if not validate_username(new_username):
-                st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
-            else:
-                try:
-                    user_id = st.session_state.user.user.id
-                    supabase.table('user_profiles').upsert({
-                        'user_id': user_id,
-                        'username': new_username,
-                        'display_name': new_display_name or new_username,
-                        'updated_at': datetime.datetime.now().isoformat()
-                    }).execute()
-                    
-                    # Actualizar estado local
-                    state['username'] = new_username
-                    state['display_name'] = new_display_name or new_username
-                    
-                    st.success("Perfil actualizado!")
-                    save_user_data()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error al actualizar perfil: {str(e)}")
-        
         st.subheader("🎨 Personalización")
         theme = st.selectbox("Tema", list(THEMES.keys()), 
                            index=list(THEMES.keys()).index(state['current_theme']), 
@@ -1371,7 +1325,6 @@ def settings_tab():
         if theme != state['current_theme']:
             state['current_theme'] = theme
             st.success("Tema cambiado!")
-            save_user_data()
             st.rerun()
 
         st.subheader("📝 Gestión de Actividades")
@@ -1380,7 +1333,6 @@ def settings_tab():
             if new_activity and new_activity not in state['activities']:
                 state['activities'].append(new_activity)
                 st.success("Actividad añadida!")
-                save_user_data()
                 st.rerun()
 
         if state['activities']:
@@ -1390,37 +1342,41 @@ def settings_tab():
             if st.button("Eliminar actividad", key="remove_activity_btn"):
                 state['activities'].remove(activity_to_remove)
                 st.success("Actividad eliminada!")
-                save_user_data()
                 st.rerun()
 
     st.subheader("📂 Gestión de Datos")
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
-        if st.button("💾 Guardar Ahora", key="manual_save"):
-            if save_user_data():
-                st.success("Datos guardados correctamente!")
-            else:
-                st.error("Error al guardar datos")
-    
+        st.write("Exportar Datos")
+        export_data()
+
     with col2:
-        if st.button("🔄 Reiniciar Datos", key="reset_data"):
-            state['activities'] = []
-            state['tasks'] = []
-            state['completed_tasks'] = []
-            state['study_goals'] = []
-            state['projects'] = []
-            state['session_history'] = []
-            st.success("Datos reiniciados (excepto configuración)")
-            save_user_data()
-            st.rerun()
+        st.write("Importar Datos")
+        uploaded_file = st.file_uploader("Subir archivo de backup", 
+                                       type=['json.gz'], 
+                                       key="upload_backup")
+        if uploaded_file is not None:
+            import_data(uploaded_file)
+
+    st.subheader("🛠️ Herramientas Avanzadas")
+    if st.button("🔄 Reiniciar Datos", key="reset_data"):
+        state['activities'] = []
+        state['tasks'] = []
+        state['completed_tasks'] = []
+        state['study_goals'] = []
+        state['projects'] = []
+        state['session_history'] = []
+        st.success("Datos reiniciados (excepto configuración)")
+        st.rerun()
 
 # ==============================================
 # Pestaña Acerca de
 # ==============================================
 
 def about_tab():
+    """Muestra la pestaña acerca de"""
     st.title("🍅 Acerca de Pomodoro Pro")
     
     st.markdown("""
@@ -1436,19 +1392,18 @@ def about_tab():
     - 🎓 Modo estudio con objetivos específicos
     - 🎨 Múltiples temas visuales
     - 📈 Estadísticas y análisis de tu rendimiento
-    - ☁️ Almacenamiento en la nube con Supabase
-    - 👤 Perfiles de usuario personalizables
 
     ### Cómo usar esta aplicación
-    1. Crea una cuenta o inicia sesión
-    2. Configura tus tiempos preferidos en la pestaña de Configuración
-    3. Personaliza tu perfil con nombre de usuario y nombre para mostrar
-    4. Selecciona una actividad y proyecto
-    5. Inicia el temporizador y concéntrate en tu tarea
-    6. Toma descansos según las indicaciones
-    7. Revisa tus estadísticas para mejorar tu productividad
+    1. Configura tus tiempos preferidos en la pestaña de Configuración
+    2. Selecciona una actividad y proyecto
+    3. Inicia el temporizador y concéntrate en tu tarea
+    4. Toma descansos según las indicaciones
+    5. Revisa tus estadísticas para mejorar tu productividad
+    """)
     
-    Tus datos se guardarán automáticamente en la nube y estarán disponibles desde cualquier dispositivo.
+    st.info("""
+    Nota: Esta aplicación almacena tus datos en la sesión actual del navegador.
+    Para conservar tus datos entre sesiones, exporta tus datos regularmente.
     """)
 
 # ==============================================
@@ -1456,6 +1411,7 @@ def about_tab():
 # ==============================================
 
 def info_tab():
+    """Muestra la pestaña de información"""
     st.title("ℹ️ Información y Ayuda")
 
     tab1, tab2, tab3 = st.tabs(["Instrucciones", "FAQ", "Contacto"])
@@ -1464,11 +1420,9 @@ def info_tab():
         st.header("Instrucciones de Uso")
         st.subheader("Configuración Inicial")
         st.markdown("""
-        1. Crea una cuenta o inicia sesión
-        2. Ve a la pestaña Configuración en la barra lateral
-        3. Configura tu perfil con nombre de usuario y nombre para mostrar
-        4. Ajusta los tiempos según tus preferencias
-        5. Selecciona un tema visual de tu preferencia
+        1. Ve a la pestaña Configuración en la barra lateral
+        2. Ajusta los tiempos según tus preferencias
+        3. Selecciona un tema visual de tu preferencia
         """)
 
         st.subheader("Uso del Temporizador")
@@ -1487,12 +1441,6 @@ def info_tab():
 
         with st.expander("¿Cómo veo mis estadísticas?"):
             st.markdown("Ve a la pestaña **Estadísticas** para ver gráficos y análisis de tu productividad.")
-            
-        with st.expander("¿Dónde se guardan mis datos?"):
-            st.markdown("Tus datos se guardan automáticamente en Supabase, un servicio en la nube. Esto te permite acceder a tus datos desde cualquier dispositivo.")
-            
-        with st.expander("¿Cómo cambio mi nombre de usuario?"):
-            st.markdown("Ve a la pestaña **Configuración** y busca la sección 'Perfil de Usuario'. Allí puedes cambiar tu nombre de usuario y nombre para mostrar.")
 
     with tab3:
         st.header("Contacto y Soporte")
@@ -1505,7 +1453,7 @@ def info_tab():
         - 🐛 Reportar un error: [GitHub Issues](https://github.com/tu-usuario/pomodoro-pro/issues)
 
         ### Versión
-        Estás usando la versión 2.0.0 de Pomodoro Pro con integración Supabase
+        Estás usando la versión 1.0.0 de Pomodoro Pro
         """)
 
 # ==============================================
@@ -1527,12 +1475,24 @@ def check_alerts():
             if deadline is None:
                 continue
                 
-            # Convertir a date
-            deadline_date = parse_date(deadline)
-            if not deadline_date:
+            # Convertir a date si es string (ajusta el formato según tus datos)
+            if isinstance(deadline, str):
+                try:
+                    # Intentar parsear con diferentes formatos
+                    try:
+                        deadline = datetime.datetime.strptime(deadline, "%Y-%m-%d").date()
+                    except ValueError:
+                        # Intentar otro formato si el primero falla
+                        deadline = datetime.datetime.strptime(deadline, "%d/%m/%Y").date()
+                except ValueError:
+                    # Si no se puede parsear, saltar esta tarea
+                    continue
+            elif isinstance(deadline, datetime.datetime):
+                deadline = deadline.date()
+            elif not isinstance(deadline, date):
                 continue
                 
-            days_remaining = (deadline_date - today).days
+            days_remaining = (deadline - today).days
             
             if days_remaining == 0:
                 alerts.append(f"⏰ Hoy: {task.get('name', 'Tarea sin nombre')}")
@@ -1548,33 +1508,21 @@ def check_alerts():
             st.sidebar.warning(alert)
 
 def sidebar():
-    # Sección de autenticación
+    """Muestra la barra lateral con navegación y controles"""
+    # Mostrar sección de autenticación
     auth_section()
     
-    # Solo mostrar el resto si el usuario está autenticado
-    if 'user' in st.session_state and st.session_state.user:
-        state = st.session_state.pomodoro_state
-        
-        # Verificar sesión
-        check_session()
+    if not check_authentication():
+        return
+    
+    state = st.session_state.pomodoro_state
 
-        # Mostrar nombre de usuario
-        display_name = state.get('display_name', '')
-        username = state.get('username', '')
-        email = st.session_state.user.user.email
+    with st.sidebar:
+        st.title("Pomodoro Pro 🍅")
         
-        if display_name:
-            st.sidebar.title(f"Pomodoro Pro 🍅")
-            st.sidebar.write(f"Bienvenido, {display_name}")
-            if username:
-                st.sidebar.caption(f"@{username}")
-        else:
-            st.sidebar.title("Pomodoro Pro 🍅")
-            st.sidebar.write(f"Bienvenido, {email}")
-
         # Navegación por pestañas
-        st.sidebar.subheader("Navegación")
-        tabs = st.sidebar.radio("Selecciona una sección:", 
+        st.subheader("Navegación")
+        tabs = st.radio("Selecciona una sección:", 
                        ["🍅 Temporizador", "📊 Estadísticas", "📋 Tareas", 
                         "🏆 Logros", "⚙️ Configuración", "ℹ️ Info"],
                        key='sidebar_nav')
@@ -1583,99 +1531,74 @@ def sidebar():
         check_alerts()
 
         # Características de estudio
-        st.sidebar.subheader("🎓 Modo Estudio")
-        state['study_mode'] = st.sidebar.checkbox("Activar modo estudio", 
+        st.subheader("🎓 Modo Estudio")
+        state['study_mode'] = st.checkbox("Activar modo estudio", 
                                         value=state['study_mode'], 
                                         key="study_mode")
         
-        # Estado de guardado
-        if 'last_saved' in st.session_state:
-            last_saved = st.session_state.last_saved
-            if isinstance(last_saved, str):
-                try:
-                    last_saved = datetime.datetime.fromisoformat(last_saved)
-                except ValueError:
-                    last_saved = datetime.datetime.now()
-            st.sidebar.caption(f"Último guardado: {last_saved.strftime('%H:%M:%S')}")
+        # Gestión de datos en la nube
+        st.subheader("☁️ Datos en la Nube")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Guardar", key="save_cloud"):
+                save_to_supabase()
+        
+        with col2:
+            if st.button("📂 Cargar", key="load_cloud"):
+                if load_from_supabase():
+                    st.rerun()
+        
+        # Cerrar sesión
+        st.divider()
+        if st.button("🚪 Cerrar Sesión", key="logout"):
+            st.session_state.authenticated = False
+            st.session_state.username = None
+            st.session_state.pomodoro_state = get_default_state()
+            st.success("Sesión cerrada exitosamente")
+            st.rerun()
 
 # ==============================================
 # Función principal
 # ==============================================
 
 def main():
-    # Inicialización del estado de la sesión
+    """Función principal de la aplicación"""
+    # Inicializar el estado si no existe
     if 'pomodoro_state' not in st.session_state:
-        # Cargar datos del usuario si está autenticado
-        if 'user' in st.session_state and st.session_state.user:
-            user_data = load_user_data()
-            if user_data:
-                st.session_state.pomodoro_state = user_data
-            else:
-                st.session_state.pomodoro_state = get_default_state()
-                
-            # Cargar perfil de usuario
-            user_profile = load_user_profile()
-            if user_profile:
-                st.session_state.pomodoro_state['username'] = user_profile.get('username', '')
-                st.session_state.pomodoro_state['display_name'] = user_profile.get('display_name', '')
-        else:
-            st.session_state.pomodoro_state = get_default_state()
+        st.session_state.pomodoro_state = get_default_state()
     
     # Barra lateral
     sidebar()
     
-    # Solo mostrar la aplicación si el usuario está autenticado
-    if 'user' in st.session_state and st.session_state.user:
-        # Guardar automáticamente cada 30 segundos
-        auto_save()
-        
-        # Crear backup local periódicamente
-        if 'last_backup' not in st.session_state or \
-           (datetime.datetime.now() - st.session_state.last_backup).seconds > 300:  # Cada 5 minutos
-            backup_local_data()
-            st.session_state.last_backup = datetime.datetime.now()
-        
-        # Obtener la pestaña seleccionada
-        selected_tab = st.session_state.sidebar_nav
+    # Verificar autenticación - si no está autenticado, no mostrar el contenido principal
+    if not check_authentication():
+        st.warning("Por favor inicia sesión o regístrate para acceder a Pomodoro Pro")
+        return
 
-        # Mostrar la pestaña correspondiente
-        if selected_tab == "🍅 Temporizador":
-            timer_tab()
-        elif selected_tab == "📊 Estadísticas":
-            stats_tab()
-        elif selected_tab == "📋 Tareas":
-            tasks_tab()
-        elif selected_tab == "🏆 Logros":
-            show_achievements()
-        elif selected_tab == "⚙️ Configuración":
-            settings_tab()
-        elif selected_tab == "ℹ️ Info":
-            # Pestañas dentro de Info
-            tab1, tab2 = st.tabs(["Acerca de", "Información y Ayuda"])
-            with tab1:
-                about_tab()
-            with tab2:
-                info_tab()
-    else:
-        # Mostrar mensaje de bienvenida para usuarios no autenticados
-        st.title("🍅 Pomodoro Pro")
-        st.markdown("""
-        ### Bienvenido a Pomodoro Pro
-        
-        Para comenzar a usar la aplicación, por favor:
-        1. Crea una cuenta o inicia sesión en la barra lateral
-        2. Personaliza tu perfil con nombre de usuario
-        3. Tus datos se guardarán automáticamente en la nube
-        4. Podrás acceder a tu información desde cualquier dispositivo
-        
-        **Características principales:**
-        - Temporizador Pomodoro configurable
-        - Gestión de tareas y proyectos
-        - Seguimiento de productividad
-        - Estadísticas detalladas
-        - Almacenamiento en la nube
-        - Perfiles de usuario personalizables
-        """)
+    # Obtener la pestaña seleccionada
+    if 'sidebar_nav' not in st.session_state:
+        st.session_state.sidebar_nav = "🍅 Temporizador"
+    
+    selected_tab = st.session_state.sidebar_nav
+
+    # Mostrar la pestaña correspondiente
+    if selected_tab == "🍅 Temporizador":
+        timer_tab()
+    elif selected_tab == "📊 Estadísticas":
+        stats_tab()
+    elif selected_tab == "📋 Tareas":
+        tasks_tab()
+    elif selected_tab == "🏆 Logros":
+        show_achievements()
+    elif selected_tab == "⚙️ Configuración":
+        settings_tab()
+    elif selected_tab == "ℹ️ Info":
+        # Pestañas dentro de Info
+        tab1, tab2 = st.tabs(["Acerca de", "Información y Ayuda"])
+        with tab1:
+            about_tab()
+        with tab2:
+            info_tab()
 
 # ==============================================
 # Ejecución de la aplicación
