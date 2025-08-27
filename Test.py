@@ -328,12 +328,11 @@ def save_to_supabase():
         state = st.session_state.pomodoro_state.copy()
         username = st.session_state.username
         
-        # Usar cliente de servicio para bypass RLS
-        response = supabase_service.table('users').upsert({
-            'username': username,
+        # Usar UPDATE en lugar de UPSERT para no afectar password_hash
+        response = supabase_service.table('users').update({
             'data': convert_dates_to_iso(state),
             'last_updated': datetime.datetime.now().isoformat()
-        }).execute()
+        }).eq('username', username).execute()
         
         st.success("Datos guardados correctamente!")
         return True
