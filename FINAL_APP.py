@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
-Versión Mejorada
+Versión Corregida con Configuración de Secrets
 """
 import streamlit as st
 import pandas as pd
@@ -24,23 +24,64 @@ from supabase import create_client, Client
 import hashlib
 import os
 
-# Configuración de Supabase (usa variables de entorno para seguridad)
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://zgvptomznuswsipfihho.supabase.co")
-SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "tu_anon_key")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "tu_service_key")
+# Configuración de Supabase - LEER DESDE SECRETS
+# Para desarrollo local, puedes usar variables de entorno
+# Para producción en Streamlit Cloud, usa st.secrets
+try:
+    # Intentar leer desde secrets de Streamlit (para producción)
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
+    SUPABASE_SERVICE_KEY = st.secrets["SUPABASE_SERVICE_KEY"]
+except (KeyError, FileNotFoundError):
+    # Fallback a variables de entorno (para desarrollo local)
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+    SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+    SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+# Verificar que las claves estén configuradas
+if not all([SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY]):
+    st.error("""
+    ❌ Error de configuración de Supabase:
+    
+    Las claves de Supabase no están configuradas correctamente.
+    
+    Para desarrollo local, configura estas variables de entorno:
+    - SUPABASE_URL
+    - SUPABASE_ANON_KEY  
+    - SUPABASE_SERVICE_KEY
+    
+    Para producción en Streamlit Cloud, configura los secrets en la configuración de la app:
+    - SUPABASE_URL
+    - SUPABASE_ANON_KEY
+    - SUPABASE_SERVICE_KEY
+    """)
+    st.stop()
 
 # Inicializar cliente de Supabase para operaciones normales
 @st.cache_resource
 def init_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    try:
+        return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    except Exception as e:
+        st.error(f"Error inicializando Supabase: {str(e)}")
+        return None
 
 # Cliente especial para operaciones que necesitan bypass RLS (como registro)
 @st.cache_resource
 def init_supabase_service():
-    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    try:
+        return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    except Exception as e:
+        st.error(f"Error inicializando Supabase Service: {str(e)}")
+        return None
 
 supabase = init_supabase()
 supabase_service = init_supabase_service()
+
+# Verificar la conexión a Supabase
+if supabase is None or supabase_service is None:
+    st.error("No se pudo inicializar la conexión a Supabase. Verifica tus claves de API.")
+    st.stop()
 
 # ==============================================
 # Configuración inicial y constantes
