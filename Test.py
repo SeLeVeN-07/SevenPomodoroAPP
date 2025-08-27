@@ -21,8 +21,8 @@ from collections import defaultdict
 from supabase import create_client, Client
 
 # Configuración de Supabase (reemplaza con tus propias credenciales)
-SUPABASE_URL = "https://tu-proyecto.supabase.co"
-SUPABASE_KEY = "tu-clave-supabase-anon-public"
+SUPABASE_URL = "https://zgvptomznuswsipfihho.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTAxNjYsImV4cCI6MjA3MTg4NjE2Nn0.Kk9qB8BKxIV7CgLZQdWW568MSpMjYtbceLQDfJvwttk"
 
 # Inicializar cliente de Supabase
 @st.cache_resource
