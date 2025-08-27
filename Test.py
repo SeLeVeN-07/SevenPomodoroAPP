@@ -1159,7 +1159,7 @@ def stats_tab():
             fig = px.line(
                 daily_totals, x='date', y='minutes',
                 title="Evolución del Tiempo por Día",
-                labels={'date': 'Fecha', 'minutes': 'Minutos}
+                labels={'date': 'Fecha', 'minutes': 'Minutos'}
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
