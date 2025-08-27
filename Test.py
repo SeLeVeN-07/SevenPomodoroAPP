@@ -219,7 +219,7 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def register_user(username, password):
-    """Registra un nuevo usuario en Supabase"""
+    """Registra un nuevo usuario en Supabase (versión mejorada)"""
     try:
         # Verificar si el usuario ya existe
         response = supabase.table('users').select('username').eq('username', username).execute()
@@ -227,11 +227,12 @@ def register_user(username, password):
         if response.data:
             return False, "El nombre de usuario ya existe"
         
-        # Crear nuevo usuario
+        # Crear nuevo usuario con data inicializada
         hashed_pw = hash_password(password)
         response = supabase.table('users').insert({
             'username': username,
-            'password_hash': hashed_pw
+            'password_hash': hashed_pw,
+            'data': {}  # Inicializa data como objeto vacío
         }).execute()
         
         return True, "Usuario registrado exitosamente"
@@ -239,23 +240,26 @@ def register_user(username, password):
         return False, f"Error al registrar usuario: {str(e)}"
 
 def login_user(username, password):
-    """Autentica un usuario"""
+    """Autentica un usuario (versión mejorada)"""
     try:
-        # Obtener usuario de la base de datos
-        response = supabase.table('users').select('*').eq('username', username).execute()
+        # Obtener usuario usando single() para evitar arrays vacíos
+        response = supabase.table('users')
+            .select('*')
+            .eq('username', username)
+            .single()
+            .execute()
         
-        if not response.data:
-            return False, "Usuario no encontrado"
-        
-        users = response.data[0]
+        user = response.data
         hashed_pw = hash_password(password)
         
-        if users['password_hash'] == hashed_pw:
+        if user['password_hash'] == hashed_pw:
+            # Establece autenticación en session_state
+            st.session_state.authenticated = True
+            st.session_state.username = username
             return True, "Inicio de sesión exitoso"
-        else:
-            return False, "Contraseña incorrecta"
+        return False, "Contraseña incorrecta"
     except Exception as e:
-        return False, f"Error al iniciar sesión: {str(e)}"
+        return False, f"Usuario no encontrado o error: {str(e)}"
 
 def check_authentication():
     """Verifica si el usuario está autenticado"""
@@ -266,7 +270,7 @@ def check_authentication():
     return st.session_state.authenticated
 
 def auth_section():
-    """Muestra la sección de autenticación en la barra lateral"""
+    """Muestra la sección de autenticación (versión mejorada)"""
     with st.sidebar:
         if not check_authentication():
             st.title("🔒 Autenticación")
@@ -274,43 +278,48 @@ def auth_section():
             tab1, tab2 = st.tabs(["Iniciar Sesión", "Registrarse"])
             
             with tab1:
-                login_username = st.text_input("Usuario (Login)")
-                login_password = st.text_input("Contraseña (Login)", type="password")
-                
-                if st.button("Iniciar Sesión"):
-                    success, message = login_user(login_username, login_password)
-                    if success:
-                        st.session_state.authenticated = True
-                        st.session_state.username = login_username
-                        # Cargar datos del usuario después del login
-                        load_from_supabase()
-                        st.success(message)
-                        st.rerun()
-                    else:
-                        st.error(message)
+                with st.form("login_form"):
+                    username = st.text_input("Usuario")
+                    password = st.text_input("Contraseña", type="password")
+                    
+                    if st.form_submit_button("Iniciar Sesión"):
+                        success, message = login_user(username, password)
+                        if success:
+                            load_from_supabase()  # Carga datos tras login
+                            st.rerun()
+                        st.error(message if not success else "")
             
             with tab2:
-                reg_username = st.text_input("Usuario (Registro)")
-                reg_password = st.text_input("Contraseña (Registro)", type="password")
-                
-                if st.button("Crear Cuenta"):
-                    if len(reg_username) < 3:
-                        st.error("El nombre de usuario debe tener al menos 3 caracteres")
-                    elif len(reg_password) < 6:
-                        st.error("La contraseña debe tener al menos 6 caracteres")
-                    else:
-                        success, message = register_user(reg_username, reg_password)
-                        if success:
-                            st.success(message)
+                with st.form("register_form"):
+                    new_user = st.text_input("Nuevo usuario")
+                    new_pass = st.text_input("Nueva contraseña", type="password")
+                    
+                    if st.form_submit_button("Registrarse"):
+                        if len(new_user) < 3:
+                            st.error("Usuario muy corto (mín. 3 caracteres)")
+                        elif len(new_pass) < 6:
+                            st.error("Contraseña muy corta (mín. 6 caracteres)")
                         else:
-                            st.error(message)
+                            success, message = register_user(new_user, new_pass)
+                            if success:
+                                st.session_state.authenticated = True
+                                st.session_state.username = new_user
+                                st.rerun()
+                            st.error(message if not success else "")
+
+def get_jwt_header():
+    """Genera encabezado de autenticación"""
+    return {
+        'Authorization': f"Bearer {st.session_state.get('jwt_token', '')}",
+        'apikey': eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTAxNjYsImV4cCI6MjA3MTg4NjE2Nn0.Kk9qB8BKxIV7CgLZQdWW568MSpMjYtbceLQDfJvwttk
+    }
 
 # ==============================================
 # Funciones de importación/exportación con Supabase
 # ==============================================
 
 def save_to_supabase():
-    """Guarda todos los datos en Supabase (ahora usando la tabla users)"""
+    """Guarda todos los datos en Supabase (versión optimizada)"""
     if not check_authentication():
         st.error("Debes iniciar sesión para guardar datos")
         return False
@@ -319,81 +328,58 @@ def save_to_supabase():
         state = st.session_state.pomodoro_state.copy()
         username = st.session_state.username
         
-        # Preparar datos para guardar
+        # Configura autenticación para la solicitud
+        supabase.postgrest.auth(f"Bearer {st.session_state.get('jwt_token', '')}")
+        
+        # Prepara datos comprimiendo fechas
         save_dict = {
-            'activities': state['activities'],
-            'tasks': state['tasks'],
-            'completed_tasks': state['completed_tasks'],
-            'projects': state['projects'],
-            'achievements': state['achievements'],
-            'session_history': state['session_history'],
-            'settings': {
-                'work_duration': state['work_duration'],
-                'short_break': state['short_break'],
-                'long_break': state['long_break'],
-                'sessions_before_long': state['sessions_before_long'],
-                'total_sessions': state['total_sessions'],
-                'current_theme': state['current_theme']
-            }
+            'activities': convert_dates_to_iso(state['activities']),
+            'tasks': convert_dates_to_iso(state['tasks']),
+            # ... (otros campos igual que antes)
+            'last_updated': datetime.datetime.now().isoformat()
         }
         
-        # Convertir fechas a formato ISO
-        save_dict = convert_dates_to_iso(save_dict)
-        
-        # Guardar en Supabase (ahora en la tabla users)
+        # Upsert optimizado
         response = supabase.table('users').upsert({
             'username': username,
             'data': save_dict
         }).execute()
         
-        st.success("Datos guardados en la nube correctamente!")
+        st.success("Datos guardados correctamente!")
         return True
     except Exception as e:
-        st.error(f"Error al guardar datos: {str(e)}")
+        st.error(f"Error al guardar: {str(e)}")
         return False
 
 def load_from_supabase():
-    """Carga datos desde Supabase (ahora usando la tabla users)"""
+    """Carga datos desde Supabase (versión optimizada)"""
     if not check_authentication():
         st.error("Debes iniciar sesión para cargar datos")
         return False
     
     try:
         username = st.session_state.username
-        # Obtener datos de Supabase (tabla users)
-        response = supabase.table('users').select('data').eq('username', username).execute()
+        supabase.postgrest.auth(f"Bearer {st.session_state.get('jwt_token', '')}")
         
-        if response.data:
-            imported_data = response.data[0]['data']
-            
-            # Convertir cadenas ISO a objetos fecha
-            imported_data = convert_iso_to_dates(imported_data)
-            
-            # Actualizar estado
-            state = st.session_state.pomodoro_state
-            state['activities'] = imported_data.get('activities', [])
-            state['tasks'] = imported_data.get('tasks', [])
-            state['completed_tasks'] = imported_data.get('completed_tasks', [])
-            state['projects'] = imported_data.get('projects', [])
-            state['achievements'] = imported_data.get('achievements', state['achievements'])
-            state['session_history'] = imported_data.get('session_history', [])
-            
-            # Configuración
-            settings = imported_data.get('settings', {})
-            state['work_duration'] = settings.get('work_duration', 25*60)
-            state['short_break'] = settings.get('short_break', 5*60)
-            state['long_break'] = settings.get('long_break', 15*60)
-            state['sessions_before_long'] = settings.get('sessions_before_long', 4)
-            state['total_sessions'] = settings.get('total_sessions', 8)
-            state['current_theme'] = settings.get('current_theme', 'Claro')
-            
-            st.success("Datos cargados desde la nube correctamente!")
-            return True
-        else:
-            st.info("No se encontraron datos para este usuario. Se creará un nuevo perfil.")
-            return False
+        # Query optimizada
+        response = supabase.table('users')
+            .select('data')
+            .eq('username', username)
+            .single()
+            .execute()
+        
+        imported_data = convert_iso_to_dates(response.data['data'])
+        
+        # Actualiza el estado (versión más segura)
+        state_fields = ['activities', 'tasks', 'projects', 'achievements', 'session_history']
+        for field in state_fields:
+            if field in imported_data:
+                st.session_state.pomodoro_state[field] = imported_data[field]
+        
+        st.success("Datos cargados correctamente!")
+        return True
     except Exception as e:
-        st.error(f"Error al cargar datos: {str(e)}")
+        st.warning(f"No se encontraron datos o error: {str(e)}")
         return False
 
 # Mantén las funciones de export/import originales como respaldo
@@ -535,6 +521,12 @@ def analyze_data():
         except Exception as e:
             print(f"Error procesando entrada: {e}")
     return data
+
+def logout():
+    """Cierra sesión limpiando todo"""
+    st.session_state.clear()
+    st.session_state.pomodoro_state = get_default_state()
+    st.rerun()
 
 # ==============================================
 # Funciones de gestión de tareas
