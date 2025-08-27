@@ -310,7 +310,7 @@ def auth_section():
 # ==============================================
 
 def save_to_supabase():
-    """Guarda todos los datos en Supabase"""
+    """Guarda todos los datos en Supabase (ahora usando la tabla users)"""
     if not check_authentication():
         st.error("Debes iniciar sesión para guardar datos")
         return False
@@ -340,7 +340,7 @@ def save_to_supabase():
         # Convertir fechas a formato ISO
         save_dict = convert_dates_to_iso(save_dict)
         
-        # Guardar en Supabase
+        # Guardar en Supabase (ahora en la tabla users)
         response = supabase.table('users').upsert({
             'username': username,
             'data': save_dict
@@ -353,14 +353,14 @@ def save_to_supabase():
         return False
 
 def load_from_supabase():
-    """Carga datos desde Supabase"""
+    """Carga datos desde Supabase (ahora usando la tabla users)"""
     if not check_authentication():
         st.error("Debes iniciar sesión para cargar datos")
         return False
     
     try:
         username = st.session_state.username
-        # Obtener datos de Supabase
+        # Obtener datos de Supabase (tabla users)
         response = supabase.table('users').select('data').eq('username', username).execute()
         
         if response.data:
