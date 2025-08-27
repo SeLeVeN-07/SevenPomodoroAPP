@@ -17,12 +17,13 @@ import json
 import base64
 import io
 import gzip
+import re
 from collections import defaultdict
 from supabase import create_client, Client
 
 # Configuración de Supabase (reemplaza con tus propias credenciales)
-SUPABASE_URL = "https://zgvptomznuswsipfihho.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTAxNjYsImV4cCI6MjA3MTg4NjE2Nn0.Kk9qB8BKxIV7CgLZQdWW568MSpMjYtbceLQDfJvwttk"
+SUPABASE_URL = "https://tu-proyecto.supabase.co"
+SUPABASE_KEY = "tu-clave-supabase-anon-public"
 
 # Inicializar cliente de Supabase
 @st.cache_resource
@@ -30,6 +31,53 @@ def init_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 supabase = init_supabase()
+
+# ==============================================
+# Funciones de serialización/deserialización de fechas
+# ==============================================
+
+def convert_dates_to_iso(obj):
+    """
+    Recursively convert all date and datetime objects in the data to ISO strings.
+    """
+    if isinstance(obj, (date, datetime.datetime)):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: convert_dates_to_iso(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_dates_to_iso(element) for element in obj]
+    else:
+        return obj
+
+def convert_iso_to_dates(obj):
+    """
+    Recursively convert all ISO date strings in the data to date or datetime objects.
+    """
+    if isinstance(obj, str):
+        # Check if the string matches a date pattern
+        try:
+            # For date strings (YYYY-MM-DD)
+            if re.match(r'^\d{4}-\d{2}-\d{2}$', obj):
+                return datetime.datetime.strptime(obj, '%Y-%m-%d').date()
+            # For datetime strings (YYYY-MM-DDTHH:MM:SS or with microseconds and timezone)
+            elif re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', obj):
+                # Try parsing with datetime
+                return datetime.datetime.fromisoformat(obj.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            pass
+        return obj
+    elif isinstance(obj, dict):
+        return {k: convert_iso_to_dates(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_iso_to_dates(element) for element in obj]
+    else:
+        return obj
+
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, (datetime.datetime, date)):
+        return obj.isoformat()
+    raise TypeError("Type %s not serializable" % type(obj))
 
 # Configuración de la página
 st.set_page_config(
@@ -180,6 +228,9 @@ def save_to_supabase(username):
             }
         }
         
+        # Convertir fechas a formato ISO
+        save_dict = convert_dates_to_iso(save_dict)
+        
         # Guardar en Supabase
         response = supabase.table('user_data').upsert({
             'username': username,
@@ -200,6 +251,9 @@ def load_from_supabase(username):
         
         if response.data:
             imported_data = response.data[0]['data']
+            
+            # Convertir cadenas ISO a objetos fecha
+            imported_data = convert_iso_to_dates(imported_data)
             
             # Actualizar estado
             state = st.session_state.pomodoro_state
@@ -251,8 +305,11 @@ def export_data():
         }
     }
     
+    # Convertir fechas a formato ISO
+    export_dict = convert_dates_to_iso(export_dict)
+    
     # Convertir a JSON y comprimir
-    json_str = json.dumps(export_dict, indent=2, ensure_ascii=False, default=str)
+    json_str = json.dumps(export_dict, indent=2, ensure_ascii=False, default=json_serial)
     compressed = gzip.compress(json_str.encode('utf-8'))
     
     # Crear archivo descargable
@@ -267,6 +324,9 @@ def import_data(uploaded_file):
         compressed = uploaded_file.read()
         json_str = gzip.decompress(compressed).decode('utf-8')
         imported_data = json.loads(json_str)
+        
+        # Convertir cadenas ISO a objetos fecha
+        imported_data = convert_iso_to_dates(imported_data)
         
         # Actualizar estado
         state = st.session_state.pomodoro_state
@@ -502,7 +562,7 @@ def hierarchical_view():
             )
             new_task_priority = st.selectbox(
                 "Prioridad",
-                ["Baja", 'Media', 'Alta', 'Urgente'],
+                ["Baja", "Media", "Alta", "Urgente"],
                 index=1,
                 key="new_task_priority"
             )
