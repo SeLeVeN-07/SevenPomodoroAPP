@@ -318,7 +318,7 @@ def get_jwt_header():
     """Genera encabezado de autenticación"""
     return {
         'Authorization': f"Bearer {st.session_state.get('jwt_token', '')}",
-        'apikey': eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTAxNjYsImV4cCI6MjA3MTg4NjE2Nn0.Kk9qB8BKxIV7CgLZQdWW568MSpMjYtbceLQDfJvwttk
+        'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTAxNjYsImV4cCI6MjA3MTg4NjE2Nn0.Kk9qB8BKxIV7CgLZQdWW568MSpMjYtbceLQDfJvwttk'
     }
 
 # ==============================================
