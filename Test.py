@@ -362,10 +362,10 @@ def load_from_supabase():
         supabase.postgrest.auth(f"Bearer {st.session_state.get('jwt_token', '')}")
         
         # Query optimizada
-        response = supabase.table('users')
-            .select('data')
-            .eq('username', username)
-            .single()
+        response = supabase.table('users') \
+            .select('data') \
+            .eq('username', username) \
+            .single() \
             .execute()
         
         imported_data = convert_iso_to_dates(response.data['data'])
