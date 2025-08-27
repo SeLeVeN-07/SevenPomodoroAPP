@@ -244,7 +244,7 @@ def validate_state(state):
                     state[field] = datetime.datetime.fromisoformat(state[field])
                 elif not isinstance(state[field], (datetime.date, datetime.datetime)):
                     state[field] = None
-            except ValueError:
+            except (ValueError, TypeError):
                 state[field] = None
     
     # 11. Validar tema
@@ -252,38 +252,6 @@ def validate_state(state):
         state['current_theme'] = 'Claro'
     
     # 12. Actualizar versión de datos
-    state['data_version'] = default_state['data_version']
-    
-    return state
-
-def safe_validate_state(state):
-    """
-    Versión segura de validación que no sobrescribe valores existentes
-    excepto cuando son claramente inválidos
-    """
-    default_state = get_default_state()
-    
-    # 1. Validar solo campos críticos
-    if not isinstance(state.get('activities', []), list):
-        state['activities'] = default_state['activities']
-    
-    # 2. Validar configuraciones del temporizador sin sobrescribir si son válidas
-    timer_settings = [
-        ('work_duration', 25*60, 5*60, 120*60),
-        ('short_break', 5*60, 1*60, 30*60),
-        ('long_break', 15*60, 5*60, 60*60)
-    ]
-    
-    for setting, default, min_val, max_val in timer_settings:
-        current = state.get(setting)
-        if not isinstance(current, (int, float)) or not (min_val <= current <= max_val):
-            state[setting] = default
-    
-    # 3. Asegurar campos obligatorios sin borrar datos existentes
-    state.setdefault('achievements', default_state['achievements'])
-    state.setdefault('session_history', [])
-    
-    # 4. Mantener la versión de datos actual
     state['data_version'] = default_state['data_version']
     
     return state
@@ -376,8 +344,8 @@ def auth_section():
                                     "user_id": user_id,
                                     "email": new_email,
                                     "username": username,
-                                    'display_name': display_name or username,
-                                    'created_at': datetime.datetime.now().isoformat()
+                                    "display_name": display_name or username,
+                                    "created_at": datetime.datetime.now().isoformat()
                                 }).execute()
                                 
                                 st.success("¡Cuenta creada exitosamente! Bienvenido/a.")
@@ -625,14 +593,6 @@ def auto_save():
         except Exception as e:
             logger.error(f"Error en auto-guardado: {str(e)}")
 
-def backup_state():
-    if 'pomodoro_state' in st.session_state:
-        try:
-            with open('pomodoro_backup.json', 'w') as f:
-                json.dump(st.session_state.pomodoro_state, f, default=str)
-        except Exception as e:
-            logger.error(f"Error en backup: {str(e)}")
-
 # ==============================================
 # Funciones del temporizador mejoradas
 # ==============================================
@@ -876,7 +836,7 @@ def add_task(state, name, description="", priority="Media", due_date=None, proje
         if not name or not isinstance(name, str):
             raise ValueError("Nombre de tarea no válido")
             
-        # Convertir el nombre del proyecto a ID si es necesario
+        # Convertir el nombre del proyecto to ID si es necesario
         project_id = ""
         if project:
             # Buscar el proyecto por nombre
@@ -1097,560 +1057,580 @@ def remove_activity(activity_name):
 # ==============================================
 
 def timer_tab():
-    state = st.session_state.pomodoro_state
-    
-    # Mostrar alertas si existen
-    if 'alerts' in st.session_state and st.session_state.alerts:
-        for alert in st.session_state.alerts:
-            st.warning(alert)
-        # Limpiar alertas después de mostrarlas
-        st.session_state.alerts = []
-    
-    # Mostrar materia actual si está en modo estudio
-    if state['study_mode'] and state['current_activity']:
-        st.header(f"📚 {state['current_activity']}")
+    try:
+        state = st.session_state.pomodoro_state
+        
+        # Mostrar alertas si existen
+        if 'alerts' in st.session_state and st.session_state.alerts:
+            for alert in st.session_state.alerts:
+                st.warning(alert)
+            # Limpiar alertas después de mostrarlas
+            st.session_state.alerts = []
+        
+        # Mostrar materia actual si está en modo estudio
+        if state['study_mode'] and state['current_activity']:
+            st.header(f"📚 {state['current_activity']}")
 
-    # Selector de actividad
-    col1, col2 = st.columns(2)
-    with col1:
-        if not state['activities']:
-            st.warning("No hay actividades disponibles. Agrega actividades en la pestaña de Configuración")
-            state['current_activity'] = ""
-        else:
-            state['current_activity'] = st.selectbox(
-                "Actividad",
-                state['activities'],
-                key="current_activity"
+        # Selector de actividad
+        col1, col2 = st.columns(2)
+        with col1:
+            if not state['activities']:
+                st.warning("No hay actividades disponibles. Agrega actividades en la pestaña de Configuración")
+                state['current_activity'] = ""
+            else:
+                state['current_activity'] = st.selectbox(
+                    "Actividad",
+                    state['activities'],
+                    key="current_activity"
+                )
+
+        # Selector de proyecto (solo proyectos asociados a la actividad actual)
+        with col2:
+            available_projects = [p['name'] for p in state['projects'] if p['activity'] == state['current_activity']]
+            if available_projects:
+                state['current_project'] = st.selectbox(
+                    "Proyecto",
+                    available_projects + ["Ninguno"],
+                    key="current_project"
+                )
+            else:
+                st.info("No hay proyectos para esta actividad")
+                state['current_project'] = "Ninguno"
+
+        # Crear proyecto rápido si es necesario
+        if state['current_activity'] and state['current_project'] == "Ninguno":
+            if st.button("➕ Crear Proyecto Rápido", key="create_project_quick"):
+                # Generar nombre predeterminado
+                default_name = f"{state['current_activity']} - Proyecto"
+                new_project = {
+                    'name': default_name,
+                    'activity': state['current_activity']
+                }
+                state['projects'].append(new_project)
+                state['current_project'] = default_name
+                st.success("Proyecto creado!")
+                st.rerun()
+
+        # Visualización del temporizador
+        theme = THEMES[state['current_theme']]
+        phase_duration = get_phase_duration(state['current_phase'])
+        progress = 1 - (state['remaining_time'] / phase_duration) if phase_duration > 0 else 0
+
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=state['remaining_time'],
+            number={'suffix': "s", 'font': {'size': 40}},
+            gauge={
+                'axis': {'range': [0, phase_duration], 'visible': False},
+                'bar': {'color': get_phase_color(state['current_phase'])},
+                'steps': [{'range': [0, phase_duration], 'color': theme['circle_bg']}]
+            },
+            domain={'x': [0, 1], 'y': [0, 1]},
+            title={'text': f"{state['current_phase']} - {format_time(state['remaining_time'])}", 'font': {'size': 24}}
+        ))
+
+        fig.update_layout(
+            height=300,
+            margin=dict(l=10, r=10, t=80, b=10),
+            paper_bgcolor=theme['bg'],
+            font={'color': theme['text']}
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Controles del temporizador
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            start_pause = st.button(
+                "▶️ Iniciar" if not state['timer_running'] else "⏸️ Pausar",
+                use_container_width=True,
+                type="primary" if not state['timer_running'] else "secondary",
+                key="start_pause_btn"
             )
 
-    # Selector de proyecto (solo proyectos asociados a la actividad actual)
-    with col2:
-        available_projects = [p['name'] for p in state['projects'] if p['activity'] == state['current_activity']]
-        if available_projects:
-            state['current_project'] = st.selectbox(
-                "Proyecto",
-                available_projects + ["Ninguno"],
-                key="current_project"
+        with col2:
+            pause_resume = st.button(
+                "⏸️ Pausar" if state['timer_running'] and not state['timer_paused'] else "▶️ Reanudar",
+                use_container_width=True,
+                disabled=not state['timer_running'],
+                key="pause_resume_btn"
             )
-        else:
-            st.info("No hay proyectos para esta actividad")
-            state['current_project'] = "Ninguno"
 
-    # Crear proyecto rápido si es necesario
-    if state['current_activity'] and state['current_project'] == "Ninguno":
-        if st.button("➕ Crear Proyecto Rápido", key="create_project_quick"):
-            # Generar nombre predeterminado
-            default_name = f"{state['current_activity']} - Proyecto"
-            new_project = {
-                'name': default_name,
-                'activity': state['current_activity']
-            }
-            state['projects'].append(new_project)
-            state['current_project'] = default_name
-            st.success("Proyecto creado!")
+        with col3:
+            skip = st.button("⏭️ Saltar Fase", use_container_width=True, key="skip_btn")
+
+        # Contador de sesiones
+        st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
+
+        # Manejo de eventos
+        if start_pause:
+            if not state['timer_running']:
+                state['timer_running'] = True
+                state['timer_paused'] = False
+                state['start_time'] = datetime.datetime.now()
+                state['total_active_time'] = 0
+                state['timer_start'] = time.monotonic()
+                state['last_update'] = time.monotonic()
+                st.toast("Temporizador iniciado! 🍅", icon="▶️")
+            else:
+                state['timer_running'] = False
+                st.toast("Temporizador detenido ⏹️", icon="⏹️")
+            save_user_data()  # Guardar inmediatamente
+            st.rerun()
+        
+        elif pause_resume:
+            if state['timer_running'] and not state['timer_paused']:
+                state['timer_paused'] = True
+                state['paused_time'] = time.monotonic()
+                st.toast("Temporizador pausado ⏸️", icon="⏸️")
+            elif state['timer_paused']:
+                state['timer_paused'] = False
+                pause_duration = time.monotonic() - state['paused_time']
+                state['timer_start'] += pause_duration
+                state['last_update'] = time.monotonic()
+                st.toast("Temporizador reanudado ▶️", icon="▶️")
+            save_user_data()  # Guardar inmediatamente
+            st.rerun()
+        
+        elif skip:
+            was_work = state['current_phase'] == "Trabajo"
+            
+            if was_work:
+                state['session_count'] += 1
+                if state['total_active_time'] >= 0.1:
+                    log_session()
+                
+                if state['session_count'] >= state['total_sessions']:
+                    st.success("¡Todas las sesiones completadas! 🎉")
+                    state['session_count'] = 0
+            
+            state['current_phase'] = determine_next_phase(was_work)
+            state['remaining_time'] = get_phase_duration(state['current_phase'])
+            state['total_active_time'] = 0
+            state['timer_running'] = False
+            state['timer_paused'] = False
+            
+            if was_work:
+                st.toast("¡Pomodoro completado! Tómate un descanso. ☕", icon="🎉")
+            else:
+                st.toast("¡Descanso completado! Volvamos al trabajo. 💪", icon="⏰")
+            
+            save_user_data()  # Guardar inmediatamente
             st.rerun()
 
-    # Visualización del temporizador
-    theme = THEMES[state['current_theme']]
-    phase_duration = get_phase_duration(state['current_phase'])
-    progress = 1 - (state['remaining_time'] / phase_duration) if phase_duration > 0 else 0
-
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=state['remaining_time'],
-        number={'suffix': "s", 'font': {'size': 40}},
-        gauge={
-            'axis': {'range': [0, phase_duration], 'visible': False},
-            'bar': {'color': get_phase_color(state['current_phase'])},
-            'steps': [{'range': [0, phase_duration], 'color': theme['circle_bg']}]
-        },
-        domain={'x': [0, 1], 'y': [0, 1]},
-        title={'text': f"{state['current_phase']} - {format_time(state['remaining_time'])}", 'font': {'size': 24}}
-    ))
-
-    fig.update_layout(
-        height=300,
-        margin=dict(l=10, r=10, t=80, b=10),
-        paper_bgcolor=theme['bg'],
-        font={'color': theme['text']}
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Controles del temporizador
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        start_pause = st.button(
-            "▶️ Iniciar" if not state['timer_running'] else "⏸️ Pausar",
-            use_container_width=True,
-            type="primary" if not state['timer_running'] else "secondary",
-            key="start_pause_btn"
-        )
-
-    with col2:
-        pause_resume = st.button(
-            "⏸️ Pausar" if state['timer_running'] and not state['timer_paused'] else "▶️ Reanudar",
-            use_container_width=True,
-            disabled=not state['timer_running'],
-            key="pause_resume_btn"
-        )
-
-    with col3:
-        skip = st.button("⏭️ Saltar Fase", use_container_width=True, key="skip_btn")
-
-    # Contador de sesiones
-    st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
-
-    # Manejo de eventos
-    if start_pause:
-        if not state['timer_running']:
-            state['timer_running'] = True
-            state['timer_paused'] = False
-            state['start_time'] = datetime.datetime.now()
-            state['total_active_time'] = 0
-            state['timer_start'] = time.monotonic()
-            state['last_update'] = time.monotonic()
-            st.toast("Temporizador iniciado! 🍅", icon="▶️")
-        else:
-            state['timer_running'] = False
-            st.toast("Temporizador detenido ⏹️", icon="⏹️")
-        save_user_data()  # Guardar inmediatamente
-        st.rerun()
-    
-    elif pause_resume:
-        if state['timer_running'] and not state['timer_paused']:
-            state['timer_paused'] = True
-            state['paused_time'] = time.monotonic()
-            st.toast("Temporizador pausado ⏸️", icon="⏸️")
-        elif state['timer_paused']:
-            state['timer_paused'] = False
-            pause_duration = time.monotonic() - state['paused_time']
-            state['timer_start'] += pause_duration
-            state['last_update'] = time.monotonic()
-            st.toast("Temporizador reanudado ▶️", icon="▶️")
-        save_user_data()  # Guardar inmediatamente
-        st.rerun()
-    
-    elif skip:
-        was_work = state['current_phase'] == "Trabajo"
-        
-        if was_work:
-            state['session_count'] += 1
-            if state['total_active_time'] >= 0.1:
-                log_session()
+        # Actualización del temporizador
+        if state['timer_running']:
+            update_timer()
+            # Forzar rerun para actualizar la visualización
+            time.sleep(0.1)
+            st.rerun()
             
-            if state['session_count'] >= state['total_sessions']:
-                st.success("¡Todas las sesiones completadas! 🎉")
-                state['session_count'] = 0
-        
-        state['current_phase'] = determine_next_phase(was_work)
-        state['remaining_time'] = get_phase_duration(state['current_phase'])
-        state['total_active_time'] = 0
-        state['timer_running'] = False
-        state['timer_paused'] = False
-        
-        if was_work:
-            st.toast("¡Pomodoro completado! Tómate un descanso. ☕", icon="🎉")
-        else:
-            st.toast("¡Descanso completado! Volvamos al trabajo. 💪", icon="⏰")
-        
-        save_user_data()  # Guardar inmediatamente
-        st.rerun()
-
-    # Actualización del temporizador
-    if state['timer_running']:
-        update_timer()
-        # Forzar rerun para actualizar la visualización
-        time.sleep(0.1)
-        st.rerun()
+    except Exception as e:
+        st.error(f"Error en el temporizador: {str(e)}")
+        logger.error(f"Error en timer_tab: {str(e)}", exc_info=True)
 
 def tasks_tab():
-    state = st.session_state.pomodoro_state
-    
-    st.title("📋 Gestión de Tareas")
-    
-    # Formulario para agregar/editar tarea
-    with st.expander("➕ Agregar Nueva Tarea", expanded=state['editing_task_id'] is not None):
-        editing_task = None
-        if state['editing_task_id'] is not None:
-            for task in state['tasks']:
-                if task['id'] == state['editing_task_id']:
-                    editing_task = task
-                    break
+    try:
+        state = st.session_state.pomodoro_state
         
-        with st.form("task_form"):
-            if editing_task:
-                st.subheader("✏️ Editar Tarea")
-            else:
-                st.subheader("➕ Nueva Tarea")
-            
-            name = st.text_input("Nombre de la tarea", 
-                                value=editing_task['name'] if editing_task else "")
-            description = st.text_area("Descripción", 
-                                    value=editing_task['description'] if editing_task else "")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                priority = st.selectbox(
-                    "Prioridad",
-                    ["Baja", "Media", "Alta"],
-                    index=["Baja", "Media", "Alta"].index(editing_task['priority']) if editing_task else 1
-                )
-            
-            with col2:
-                due_date = st.date_input(
-                    "Fecha de vencimiento",
-                    value=editing_task['due_date'] if editing_task and editing_task['due_date'] else datetime.date.today(),
-                    key=f"due_date_{state['editing_task_id'] or 'new'}"
-                )
-            
-            # Selector de proyecto - usar nombres en lugar de IDs para mejor UX
-            project_options = [""] + [project['name'] for project in state['projects']]
-            project_index = 0
-            if editing_task and editing_task['project']:
-                # Encontrar el proyecto por ID y obtener su índice
-                for i, project in enumerate(state['projects']):
-                    if project['id'] == editing_task['project']:
-                        project_index = i + 1  # +1 porque el primer elemento es vacío
+        st.title("📋 Gestión de Tareas")
+        
+        # Formulario para agregar/editar tarea
+        with st.expander("➕ Agregar Nueva Tarea", expanded=state['editing_task_id'] is not None):
+            editing_task = None
+            if state['editing_task_id'] is not None:
+                for task in state['tasks']:
+                    if task['id'] == state['editing_task_id']:
+                        editing_task = task
                         break
             
-            project_name = st.selectbox(
-                "Proyecto",
-                project_options,
-                index=project_index,
-                key=f"project_{state['editing_task_id'] or 'new'}"
-            )
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.form_submit_button("💾 Guardar"):
-                    if name:
-                        # Convertir nombre de proyecto a ID
-                        project_id = ""
-                        if project_name:
-                            for project in state['projects']:
-                                if project['name'] == project_name:
-                                    project_id = project['id']
-                                    break
-                        
-                        if editing_task:
-                            update_task(state, editing_task['id'], name=name, description=description, 
-                                       priority=priority, due_date=due_date, project=project_id)
-                            st.success("Tarea actualizada!")
-                        else:
-                            add_task(state, name, description, priority, due_date, project_id)
-                            st.success("Tarea agregada!")
-                        state['editing_task_id'] = None
-                        st.rerun()
-                    else:
-                        st.error("El nombre de la tarea es obligatorio")
-            
-            with col2:
-                if st.form_submit_button("❌ Cancelar"):
-                    state['editing_task_id'] = None
-                    st.rerun()
-    
-    # Gestión de proyectos
-    with st.expander("📂 Gestión de Proyectos"):
-        st.subheader("Proyectos")
-        
-        # Formulario para agregar/editar proyecto
-        editing_project = None
-        if state['editing_project_id'] is not None:
-            for project in state['projects']:
-                if project['id'] == state['editing_project_id']:
-                    editing_project = project
-                    break
-        
-        with st.form("project_form"):
-            if editing_project:
-                st.write("✏️ Editar proyecto")
-                project_name = st.text_input("Nombre del proyecto", value=editing_project['name'])
-            else:
-                st.write("➕ Nuevo proyecto")
-                project_name = st.text_input("Nombre del proyecto")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.form_submit_button("💾 Guardar"):
-                    if project_name:
-                        if editing_project:
-                            update_project(state, editing_project['id'], project_name)
-                            st.success("Proyecto actualizado!")
-                        else:
-                            add_project(state, project_name)
-                            st.success("Proyecto agregado!")
-                        state['editing_project_id'] = None
-                        st.rerun()
-                    else:
-                        st.error("El nombre del proyecto es obligatorio")
-            
-            with col2:
-                if st.form_submit_button("❌ Cancelar"):
-                    state['editing_project_id'] = None
-                    st.rerun()
-        
-        # Lista de proyectos
-        if state['projects']:
-            st.write("---")
-            st.write("Lista de proyectos:")
-            for project in state['projects']:
-                col1, col2, col3 = st.columns([3, 1, 1])
+            with st.form("task_form"):
+                if editing_task:
+                    st.subheader("✏️ Editar Tarea")
+                else:
+                    st.subheader("➕ Nueva Tarea")
+                
+                name = st.text_input("Nombre de la tarea", 
+                                    value=editing_task['name'] if editing_task else "")
+                description = st.text_area("Descripción", 
+                                        value=editing_task['description'] if editing_task else "")
+                
+                col1, col2 = st.columns(2)
                 with col1:
-                    st.write(f"• {project['name']}")
-                    # Mostrar número de tareas en este proyecto
-                    task_count = sum(1 for task in state['tasks'] if task.get('project') == project['id'])
-                    st.caption(f"{task_count} tarea(s)")
-                with col2:
-                    if st.button("✏️", key=f"edit_project_{project['id']}"):
-                        state['editing_project_id'] = project['id']
-                        st.rerun()
-                with col3:
-                    if st.button("🗑️", key=f"delete_project_{project['id']}"):
-                        delete_project(state, project['id'])
-                        st.success("Proyecto eliminado!")
-                        st.rerun()
-        else:
-            st.info("No hay proyectos creados")
-    
-    # Lista de tareas
-    st.subheader("📝 Lista de Tareas")
-    
-    # Filtros
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        filter_status = st.selectbox("Filtrar por estado", ["Todas", "Pendientes", "Completadas"])
-    with col2:
-        filter_priority = st.selectbox("Filtrar por prioridad", ["Todas", "Baja", "Media", "Alta"])
-    with col3:
-        project_options = ["Todos"] + [project['name'] for project in state['projects']]
-        filter_project = st.selectbox("Filtrar por proyecto", project_options)
-    
-    # Aplicar filtros
-    filtered_tasks = state['tasks']
-    if filter_status == "Pendientes":
-        filtered_tasks = [task for task in filtered_tasks if not task['completed']]
-    elif filter_status == "Completadas":
-        filtered_tasks = [task for task in filtered_tasks if task['completed']]
-    
-    if filter_priority != "Todas":
-        filtered_tasks = [task for task in filtered_tasks if task['priority'] == filter_priority]
-    
-    if filter_project != "Todos":
-        # Encontrar el ID del proyecto seleccionado
-        project_id = ""
-        for project in state['projects']:
-            if project['name'] == filter_project:
-                project_id = project['id']
-                break
-        filtered_tasks = [task for task in filtered_tasks if task.get('project') == project_id]
-    
-    # Mostrar tareas
-    if not filtered_tasks:
-        st.info("No hay tareas que coincidan con los filtros")
-    else:
-        for task in filtered_tasks:
-            with st.container(border=True):
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    status_icon = "✅ " if task['completed'] else "⏳ "
-                    priority_color = {
-                        "Baja": "blue",
-                        "Media": "orange",
-                        "Alta": "red"
-                    }
-                    
-                    st.write(f"{status_icon} **{task['name']}**")
-                    
-                    # Obtener nombre del proyecto
-                    project_name = "Ninguno"
-                    if task.get('project'):
-                        for project in state['projects']:
-                            if project['id'] == task['project']:
-                                project_name = project['name']
-                                break
-                    
-                    st.caption(f"📅 Vence: {task['due_date'].strftime('%d/%m/%Y') if task['due_date'] else 'Sin fecha'} | "
-                            f"🔺 Prioridad: :{priority_color[task['priority']]}[{task['priority']}] | "
-                            f"📂 Proyecto: {project_name}")
-                    
-                    if task['description']:
-                        st.write(f"📝 {task['description']}")
+                    priority = st.selectbox(
+                        "Prioridad",
+                        ["Baja", "Media", "Alta"],
+                        index=["Baja", "Media", "Alta"].index(editing_task['priority']) if editing_task else 1
+                    )
                 
                 with col2:
-                    if not task['completed']:
-                        if st.button("✅ Completar", key=f"complete_{task['id']}"):
-                            update_task(state, task['id'], completed=True)
-                            st.success("Tarea completada!")
+                    due_date = st.date_input(
+                        "Fecha de vencimiento",
+                        value=editing_task['due_date'] if editing_task and editing_task['due_date'] else datetime.date.today(),
+                        key=f"due_date_{state['editing_task_id'] or 'new'}"
+                    )
+                
+                # Selector de proyecto - usar nombres en lugar de IDs para mejor UX
+                project_options = [""] + [project['name'] for project in state['projects']]
+                project_index = 0
+                if editing_task and editing_task['project']:
+                    # Encontrar el proyecto por ID y obtener su índice
+                    for i, project in enumerate(state['projects']):
+                        if project['id'] == editing_task['project']:
+                            project_index = i + 1  # +1 porque el primer elemento es vacío
+                            break
+                
+                project_name = st.selectbox(
+                    "Proyecto",
+                    project_options,
+                    index=project_index,
+                    key=f"project_{state['editing_task_id'] or 'new'}"
+                )
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.form_submit_button("💾 Guardar"):
+                        if name:
+                            # Convertir nombre de proyecto a ID
+                            project_id = ""
+                            if project_name:
+                                for project in state['projects']:
+                                    if project['name'] == project_name:
+                                        project_id = project['id']
+                                        break
+                            
+                            if editing_task:
+                                update_task(state, editing_task['id'], name=name, description=description, 
+                                           priority=priority, due_date=due_date, project=project_id)
+                                st.success("Tarea actualizada!")
+                            else:
+                                add_task(state, name, description, priority, due_date, project_id)
+                                st.success("Tarea agregada!")
+                            state['editing_task_id'] = None
                             st.rerun()
+                        else:
+                            st.error("El nombre de la tarea es obligatorio")
+                
+                with col2:
+                    if st.form_submit_button("❌ Cancelar"):
+                        state['editing_task_id'] = None
+                        st.rerun()
+        
+        # Gestión de proyectos
+        with st.expander("📂 Gestión de Proyectos"):
+            st.subheader("Proyectos")
+            
+            # Formulario para agregar/editar proyecto
+            editing_project = None
+            if state['editing_project_id'] is not None:
+                for project in state['projects']:
+                    if project['id'] == state['editing_project_id']:
+                        editing_project = project
+                        break
+            
+            with st.form("project_form"):
+                if editing_project:
+                    st.write("✏️ Editar proyecto")
+                    project_name = st.text_input("Nombre del proyecto", value=editing_project['name'])
+                else:
+                    st.write("➕ Nuevo proyecto")
+                    project_name = st.text_input("Nombre del proyecto")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.form_submit_button("💾 Guardar"):
+                        if project_name:
+                            if editing_project:
+                                update_project(state, editing_project['id'], project_name)
+                                st.success("Proyecto actualizado!")
+                            else:
+                                add_project(state, project_name)
+                                st.success("Proyecto agregado!")
+                            state['editing_project_id'] = None
+                            st.rerun()
+                        else:
+                            st.error("El nombre del proyecto es obligatorio")
+                
+                with col2:
+                    if st.form_submit_button("❌ Cancelar"):
+                        state['editing_project_id'] = None
+                        st.rerun()
+            
+            # Lista de proyectos
+            if state['projects']:
+                st.write("---")
+                st.write("Lista de proyectos:")
+                for project in state['projects']:
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    with col1:
+                        st.write(f"• {project['name']}")
+                        # Mostrar número de tareas en este proyecto
+                        task_count = sum(1 for task in state['tasks'] if task.get('project') == project['id'])
+                        st.caption(f"{task_count} tarea(s)")
+                    with col2:
+                        if st.button("✏️", key=f"edit_project_{project['id']}"):
+                            state['editing_project_id'] = project['id']
+                            st.rerun()
+                    with col3:
+                        if st.button("🗑️", key=f"delete_project_{project['id']}"):
+                            delete_project(state, project['id'])
+                            st.success("Proyecto eliminado!")
+                            st.rerun()
+            else:
+                st.info("No hay proyectos creados")
+        
+        # Lista de tareas
+        st.subheader("📝 Lista de Tareas")
+        
+        # Filtros
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            filter_status = st.selectbox("Filtrar por estado", ["Todas", "Pendientes", "Completadas"])
+        with col2:
+            filter_priority = st.selectbox("Filtrar por prioridad", ["Todas", "Baja", "Media", "Alta"])
+        with col3:
+            project_options = ["Todos"] + [project['name'] for project in state['projects']]
+            filter_project = st.selectbox("Filtrar por proyecto", project_options)
+        
+        # Aplicar filtros
+        filtered_tasks = state['tasks']
+        if filter_status == "Pendientes":
+            filtered_tasks = [task for task in filtered_tasks if not task['completed']]
+        elif filter_status == "Completadas":
+            filtered_tasks = [task for task in filtered_tasks if task['completed']]
+        
+        if filter_priority != "Todas":
+            filtered_tasks = [task for task in filtered_tasks if task['priority'] == filter_priority]
+        
+        if filter_project != "Todos":
+            # Encontrar el ID del proyecto seleccionado
+            project_id = ""
+            for project in state['projects']:
+                if project['name'] == filter_project:
+                    project_id = project['id']
+                    break
+            filtered_tasks = [task for task in filtered_tasks if task.get('project') == project_id]
+        
+        # Mostrar tareas
+        if not filtered_tasks:
+            st.info("No hay tareas que coincidan con los filtros")
+        else:
+            for task in filtered_tasks:
+                with st.container(border=True):
+                    col1, col2 = st.columns([4, 1])
+                    with col1:
+                        status_icon = "✅ " if task['completed'] else "⏳ "
+                        priority_color = {
+                            "Baja": "blue",
+                            "Media": "orange",
+                            "Alta": "red"
+                        }
+                        
+                        st.write(f"{status_icon} **{task['name']}**")
+                        
+                        # Obtener nombre del proyecto
+                        project_name = "Ninguno"
+                        if task.get('project'):
+                            for project in state['projects']:
+                                if project['id'] == task['project']:
+                                    project_name = project['name']
+                                    break
+                        
+                        st.caption(f"📅 Vence: {task['due_date'].strftime('%d/%m/%Y') if task['due_date'] else 'Sin fecha'} | "
+                                f"🔺 Prioridad: :{priority_color[task['priority']]}[{task['priority']}] | "
+                                f"📂 Proyecto: {project_name}")
+                        
+                        if task['description']:
+                            st.write(f"📝 {task['description']}")
                     
-                    col2_1, col2_2 = st.columns(2)
-                    with col2_1:
-                        if st.button("✏️", key=f"edit_{task['id']}"):
-                            state['editing_task_id'] = task['id']
-                            st.rerun()
-                    with col2_2:
-                        if st.button("🗑️", key=f"delete_{task['id']}"):
-                            delete_task(state, task['id'])
-                            st.success("Tarea eliminada!")
-                            st.rerun()
+                    with col2:
+                        if not task['completed']:
+                            if st.button("✅ Completar", key=f"complete_{task['id']}"):
+                                update_task(state, task['id'], completed=True)
+                                st.success("Tarea completada!")
+                                st.rerun()
+                        
+                        col2_1, col2_2 = st.columns(2)
+                        with col2_1:
+                            if st.button("✏️", key=f"edit_{task['id']}"):
+                                state['editing_task_id'] = task['id']
+                                st.rerun()
+                        with col2_2:
+                            if st.button("🗑️", key=f"delete_{task['id']}"):
+                                delete_task(state, task['id'])
+                                st.success("Tarea eliminada!")
+                                st.rerun()
+                                
+    except Exception as e:
+        st.error(f"Error en la gestión de tareas: {str(e)}")
+        logger.error(f"Error en tasks_tab: {str(e)}", exc_info=True)
 
 def stats_tab():
-    state = st.session_state.pomodoro_state
-    
-    st.title("📊 Estadísticas")
-    
-    if not state['session_history']:
-        st.warning("No hay datos de sesiones registrados")
-        return
-    
-    # Métricas principales
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        total_pomodoros = state['achievements']['pomodoros_completed']
-        st.metric("Pomodoros completados", total_pomodoros)
-    with col2:
-        total_hours = state['achievements']['total_hours']
-        st.metric("Horas totales", f"{total_hours:.1f}")
-    with col3:
-        streak = state['achievements']['streak_days']
-        st.metric("Racha actual (días)", streak)
-    
-    # Gráfico de actividad por día
     try:
-        df = pd.DataFrame(state['session_history'])
-        df['Fecha'] = pd.to_datetime(df['Fecha'])
-        df['Duración (h)'] = df['Tiempo Activo (min)'] / 60
+        state = st.session_state.pomodoro_state
         
-        daily = df.groupby('Fecha')['Duración (h)'].sum().reset_index()
+        st.title("📊 Estadísticas")
         
-        fig = px.bar(daily, x='Fecha', y='Duración (h)',
-                     title="Tiempo por día",
-                     labels={'Fecha': 'Fecha', 'Duración (h)': 'Horas'})
-        st.plotly_chart(fig, use_container_width=True)
+        if not state['session_history']:
+            st.warning("No hay datos de sesiones registrados")
+            return
+        
+        # Métricas principales
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            total_pomodoros = state['achievements']['pomodoros_completed']
+            st.metric("Pomodoros completados", total_pomodoros)
+        with col2:
+            total_hours = state['achievements']['total_hours']
+            st.metric("Horas totales", f"{total_hours:.1f}")
+        with col3:
+            streak = state['achievements']['streak_days']
+            st.metric("Racha actual (días)", streak)
+        
+        # Gráfico de actividad por día
+        try:
+            df = pd.DataFrame(state['session_history'])
+            df['Fecha'] = pd.to_datetime(df['Fecha'])
+            df['Duración (h)'] = df['Tiempo Activo (min)'] / 60
+            
+            daily = df.groupby('Fecha')['Duración (h)'].sum().reset_index()
+            
+            fig = px.bar(daily, x='Fecha', y='Duración (h)',
+                         title="Tiempo por día",
+                         labels={'Fecha': 'Fecha', 'Duración (h)': 'Horas'})
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error al generar gráficos: {str(e)}")
+            
     except Exception as e:
-        st.error(f"Error al generar gráficos: {str(e)}")
+        st.error(f"Error en las estadísticas: {str(e)}")
+        logger.error(f"Error en stats_tab: {str(e)}", exc_info=True)
 
 def settings_tab():
-    state = st.session_state.pomodoro_state
-    
-    st.title("⚙️ Configuración")
+    try:
+        state = st.session_state.pomodoro_state
+        
+        st.title("⚙️ Configuración")
 
-    col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-    with col1:
-        st.subheader("⏱️ Temporizador")
-        work_min = st.number_input("Trabajo (min)", min_value=1, max_value=120, 
-                                 value=state['work_duration'] // 60)
-        short_min = st.number_input("Descanso corto (min)", min_value=1, max_value=30, 
-                                  value=state['short_break'] // 60)
-        long_min = st.number_input("Descanso largo (min)", min_value=1, max_value=60, 
-                                 value=state['long_break'] // 60)
-        sessions_long = st.number_input("Sesiones antes de descanso largo", min_value=1, 
-                                      max_value=10, value=state['sessions_before_long'])
-        total_sess = st.number_input("Sesiones totales", min_value=1, 
-                                   max_value=20, value=state['total_sessions'])
+        with col1:
+            st.subheader("⏱️ Temporizador")
+            work_min = st.number_input("Trabajo (min)", min_value=1, max_value=120, 
+                                     value=state['work_duration'] // 60)
+            short_min = st.number_input("Descanso corto (min)", min_value=1, max_value=30, 
+                                      value=state['short_break'] // 60)
+            long_min = st.number_input("Descanso largo (min)", min_value=1, max_value=60, 
+                                     value=state['long_break'] // 60)
+            sessions_long = st.number_input("Sesiones antes de descanso largo", min_value=1, 
+                                          max_value=10, value=state['sessions_before_long'])
+            total_sess = st.number_input("Sesiones totales", min_value=1, 
+                                       max_value=20, value=state['total_sessions'])
 
-        if st.button("💾 Guardar configuración"):
-            state['work_duration'] = work_min * 60
-            state['short_break'] = short_min * 60
-            state['long_break'] = long_min * 60
-            state['sessions_before_long'] = sessions_long
-            state['total_sessions'] = total_sess
+            if st.button("💾 Guardar configuración"):
+                state['work_duration'] = work_min * 60
+                state['short_break'] = short_min * 60
+                state['long_break'] = long_min * 60
+                state['sessions_before_long'] = sessions_long
+                state['total_sessions'] = total_sess
+                
+                if state['current_phase'] == "Trabajo":
+                    state['remaining_time'] = state['work_duration']
+                elif state['current_phase'] == "Descanso Corto":
+                    state['remaining_time'] = state['short_break']
+                elif state['current_phase'] == "Descanso Largo":
+                    state['remaining_time'] = state['long_break']
+                
+                save_user_data()
+                st.success("Configuración guardada!")
+                st.rerun()
+
+        with col2:
+            st.subheader("👤 Perfil de Usuario")
             
-            if state['current_phase'] == "Trabajo":
-                state['remaining_time'] = state['work_duration']
-            elif state['current_phase'] == "Descanso Corto":
-                state['remaining_time'] = state['short_break']
-            elif state['current_phase'] == "Descanso Largo":
-                state['remaining_time'] = state['long_break']
-            
-            save_user_data()
-            st.success("Configuración guardada!")
-            st.rerun()
-
-    with col2:
-        st.subheader("👤 Perfil de Usuario")
-        
-        # Cargar perfil de usuario
-        user_profile = load_user_profile()
-        if user_profile:
-            current_username = user_profile.get('username', '')
-            current_display_name = user_profile.get('display_name', '')
-            current_email = user_profile.get('email', '')
-        else:
-            current_username = ''
-            current_display_name = ''
-            current_email = getattr(st.session_state.user.user, 'email', '') if hasattr(st.session_state.user, 'user') else ''
-        
-        new_username = st.text_input("Nombre de usuario", value=current_username)
-        new_display_name = st.text_input("Nombre para mostrar", value=current_display_name)
-        
-        if st.button("💾 Actualizar Perfil"):
-            if not validate_username(new_username):
-                st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
+            # Cargar perfil de usuario
+            user_profile = load_user_profile()
+            if user_profile:
+                current_username = user_profile.get('username', '')
+                current_display_name = user_profile.get('display_name', '')
+                current_email = user_profile.get('email', '')
             else:
-                try:
-                    # Asegurarse de que tenemos el email
-                    if not current_email and hasattr(st.session_state.user.user, 'email'):
-                        current_email = st.session_state.user.user.email
-                    
-                    user_id = st.session_state.user.user.id
-                    supabase.table('user_profiles').upsert({
-                        'user_id': user_id,
-                        'email': current_email,
-                        'username': new_username,
-                        'display_name': new_display_name or new_username,
-                        'updated_at': datetime.datetime.now().isoformat()
-                    }).execute()
-                    
-                    # Actualizar estado local
-                    st.session_state.pomodoro_state['username'] = new_username
-                    st.session_state.pomodoro_state['display_name'] = new_display_name or new_username
-                    
-                    st.success("Perfil actualizado!")
-                    save_user_data()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error al actualizar perfil: {str(e)}")
+                current_username = ''
+                current_display_name = ''
+                current_email = getattr(st.session_state.user.user, 'email', '') if hasattr(st.session_state.user, 'user') else ''
             
-        st.subheader("🎨 Apariencia")
-        theme = st.selectbox("Tema", list(THEMES.keys()), 
-                           index=list(THEMES.keys()).index(state['current_theme']))
-        
-        if theme != state['current_theme']:
-            state['current_theme'] = theme
-            st.rerun()
-        
-        st.subheader("📝 Gestión de Actividades")
-    
-        # Lista actual de actividades
-        st.write("Actividades disponibles:")
-        activities = st.session_state.pomodoro_state.get('activities', [])
-        st.write(activities)
-        
-        # Formulario para agregar
-        with st.form("add_activity_form"):
-            new_activity = st.text_input("Nueva actividad", key="new_activity_input")
-            submitted = st.form_submit_button("➕ Agregar Actividad")
+            new_username = st.text_input("Nombre de usuario", value=current_username)
+            new_display_name = st.text_input("Nombre para mostrar", value=current_display_name)
             
-            if submitted:
-                if new_activity:
-                    if add_activity(new_activity.strip()):
-                        st.rerun()
+            if st.button("💾 Actualizar Perfil"):
+                if not validate_username(new_username):
+                    st.error("El nombre de usuario debe tener entre 3 y 20 caracteres y solo puede contener letras, números, guiones y guiones bajos")
                 else:
-                    st.warning("Ingresa un nombre para la actividad")
-        
-        # Opción para eliminar
-        if activities:
-            to_delete = st.selectbox("Selecciona actividad a eliminar", 
-                                   [""] + activities,
-                                   key="delete_activity_select")
+                    try:
+                        # Asegurarse de que tenemos el email
+                        if not current_email and hasattr(st.session_state.user.user, 'email'):
+                            current_email = st.session_state.user.user.email
+                        
+                        user_id = st.session_state.user.user.id
+                        supabase.table('user_profiles').upsert({
+                            'user_id': user_id,
+                            'email': current_email,
+                            'username': new_username,
+                            'display_name': new_display_name or new_username,
+                            'updated_at': datetime.datetime.now().isoformat()
+                        }).execute()
+                        
+                        # Actualizar estado local
+                        st.session_state.pomodoro_state['username'] = new_username
+                        st.session_state.pomodoro_state['display_name'] = new_display_name or new_username
+                        
+                        st.success("Perfil actualizado!")
+                        save_user_data()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al actualizar perfil: {str(e)}")
+                
+            st.subheader("🎨 Apariencia")
+            theme = st.selectbox("Tema", list(THEMES.keys()), 
+                               index=list(THEMES.keys()).index(state['current_theme']))
             
-            if to_delete and st.button("➖ Eliminar Actividad"):
-                if remove_activity(to_delete):
-                    st.rerun()
+            if theme != state['current_theme']:
+                state['current_theme'] = theme
+                st.rerun()
+            
+            st.subheader("📝 Gestión de Actividades")
+        
+            # Lista actual de actividades
+            st.write("Actividades disponibles:")
+            activities = st.session_state.pomodoro_state.get('activities', [])
+            st.write(activities)
+            
+            # Formulario para agregar
+            with st.form("add_activity_form"):
+                new_activity = st.text_input("Nueva actividad", key="new_activity_input")
+                submitted = st.form_submit_button("➕ Agregar Actividad")
+                
+                if submitted:
+                    if new_activity:
+                        if add_activity(new_activity.strip()):
+                            st.rerun()
+                    else:
+                        st.warning("Ingresa un nombre para la actividad")
+            
+            # Opción para eliminar
+            if activities:
+                to_delete = st.selectbox("Selecciona actividad a eliminar", 
+                                       [""] + activities,
+                                       key="delete_activity_select")
+                
+                if to_delete and st.button("➖ Eliminar Actividad"):
+                    if remove_activity(to_delete):
+                        st.rerun()
+                        
+    except Exception as e:
+        st.error(f"Error en la configuración: {str(e)}")
+        logger.error(f"Error en settings_tab: {str(e)}", exc_info=True)
 
 def sidebar():
     auth_section()
@@ -1775,7 +1755,7 @@ def main():
                 
         except Exception as e:
             logger.error(f"Error en la interfaz principal: {str(e)}", exc_info=True)
-            st.error("¡Oops! Algo salió mal. Por favor recarga la página.")
+            st.error(f"¡Oops! Algo salió mal. Error: {str(e)}. Por favor recarga la página.")
             if st.button("Recargar aplicación"):
                 st.session_state.clear()
                 st.rerun()
