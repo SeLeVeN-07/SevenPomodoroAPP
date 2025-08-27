@@ -22,16 +22,23 @@ from collections import defaultdict
 from supabase import create_client, Client
 import hashlib
 
-# Configuración de Supabase (reemplaza con tus propias credenciales)
+# Configuración de Supabase (usa Service Role Key para registro)
 SUPABASE_URL = "https://zgvptomznuswsipfihho.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTAxNjYsImV4cCI6MjA3MTg4NjE2Nn0.Kk9qB8BKxIV7CgLZQdWW568MSpMjYtbceLQDfJvwttk"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTAxNjYsImV4cCI6MjA3MTg4NjE2Nn0.Kk9qB8BKxIV7CgLZQdWW568MSpMjYtbceLQDfJvwttk"
+SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjMxMDE2NiwiZXhwIjoyMDcxODg2MTY2fQ.pXOv9xlz-xh8p572WEP1xVYN5Wa20cnLsg-x2IvuVNQ"  # Reemplaza con tu Service Role Key
 
-# Inicializar cliente de Supabase
+# Inicializar cliente de Supabase para operaciones normales
 @st.cache_resource
 def init_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+# Cliente especial para operaciones que necesitan bypass RLS (como registro)
+@st.cache_resource
+def init_supabase_service():
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 supabase = init_supabase()
+supabase_service = init_supabase_service()
 
 # ==============================================
 # Configuración inicial y constantes
@@ -219,17 +226,17 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def register_user(username, password):
-    """Registra un nuevo usuario en Supabase"""
+    """Registra un nuevo usuario en Supabase usando service role key"""
     try:
-        # Verificar si el usuario ya existe
+        # Verificar si el usuario ya existe (usando cliente normal)
         response = supabase.table('users').select('username').eq('username', username).execute()
         
         if response.data:
             return False, "El nombre de usuario ya existe"
         
-        # Crear nuevo usuario con data inicializada
+        # Crear nuevo usuario con data inicializada (usando service role para bypass RLS)
         hashed_pw = hash_password(password)
-        response = supabase.table('users').insert({
+        response = supabase_service.table('users').insert({
             'username': username,
             'password_hash': hashed_pw,
             'data': convert_dates_to_iso(get_default_state())  # Inicializa con datos por defecto
