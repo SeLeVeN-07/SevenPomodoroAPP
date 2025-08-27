@@ -218,28 +218,24 @@ def convert_iso_to_dates(obj):
         return obj
 
 # ==============================================
-# Funciones de autenticación y seguridad
+# Funciones de autenticación y seguridad (VERSIÓN CORREGIDA)
 # ==============================================
-
-def hash_password(password):
-    """Hashea la contraseña usando SHA-256"""
-    return hashlib.sha256(password.encode()).hexdigest()
 
 def register_user(username, password):
     """Registra un nuevo usuario en Supabase usando service role key"""
     try:
-        # Verificar si el usuario ya existe (usando cliente normal)
-        response = supabase.table('users').select('username').eq('username', username).execute()
+        # Verificar si el usuario ya existe usando el cliente de servicio
+        response = supabase_service.table('users').select('username').eq('username', username).execute()
         
         if response.data:
             return False, "El nombre de usuario ya existe"
         
-        # Crear nuevo usuario con data inicializada (usando service role para bypass RLS)
+        # Crear nuevo usuario con data inicializada
         hashed_pw = hash_password(password)
         response = supabase_service.table('users').insert({
             'username': username,
             'password_hash': hashed_pw,
-            'data': convert_dates_to_iso(get_default_state())  # Inicializa con datos por defecto
+            'data': convert_dates_to_iso(get_default_state())
         }).execute()
         
         return True, "Usuario registrado exitosamente"
@@ -247,82 +243,30 @@ def register_user(username, password):
         return False, f"Error al registrar usuario: {str(e)}"
 
 def login_user(username, password):
-    """Autentica un usuario (versión mejorada)"""
+    """Autentica un usuario (versión corregida)"""
     try:
-        # Obtener usuario usando single() para evitar arrays vacíos
-        response = supabase.table('users') \
+        # Usar el cliente de servicio para bypass RLS
+        response = supabase_service.table('users') \
             .select('*') \
             .eq('username', username) \
-            .single() \
             .execute()
         
-        user = response.data
+        if not response.data:
+            return False, "Usuario no encontrado"
+            
+        user = response.data[0]
         hashed_pw = hash_password(password)
         
         if user['password_hash'] == hashed_pw:
-            # Establece autenticación en session_state
             st.session_state.authenticated = True
             st.session_state.username = username
             return True, "Inicio de sesión exitoso"
         return False, "Contraseña incorrecta"
     except Exception as e:
-        return False, f"Usuario no encontrado o error: {str(e)}"
-
-def check_authentication():
-    """Verifica si el usuario está autenticado"""
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    if 'username' not in st.session_state:
-        st.session_state.username = None
-    return st.session_state.authenticated
-
-def auth_section():
-    """Muestra la sección de autenticación (versión mejorada)"""
-    with st.sidebar:
-        if not check_authentication():
-            st.title("🔒 Autenticación")
-            
-            tab1, tab2 = st.tabs(["Iniciar Sesión", "Registrarse"])
-            
-            with tab1:
-                with st.form("login_form"):
-                    username = st.text_input("Usuario")
-                    password = st.text_input("Contraseña", type="password")
-                    
-                    if st.form_submit_button("Iniciar Sesión"):
-                        success, message = login_user(username, password)
-                        if success:
-                            load_from_supabase()  # Carga datos tras login
-                            st.rerun()
-                        st.error(message if not success else "")
-            
-            with tab2:
-                with st.form("register_form"):
-                    new_user = st.text_input("Nuevo usuario")
-                    new_pass = st.text_input("Nueva contraseña", type="password")
-                    
-                    if st.form_submit_button("Registrarse"):
-                        if len(new_user) < 3:
-                            st.error("Usuario muy corto (mín. 3 caracteres)")
-                        elif len(new_pass) < 6:
-                            st.error("Contraseña muy corta (mín. 6 caracteres)")
-                        else:
-                            success, message = register_user(new_user, new_pass)
-                            if success:
-                                st.session_state.authenticated = True
-                                st.session_state.username = new_user
-                                st.rerun()
-                            st.error(message if not success else "")
-
-def get_jwt_header():
-    """Genera encabezado de autenticación"""
-    return {
-        'Authorization': f"Bearer {st.session_state.get('jwt_token', '')}",
-        'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpndnB0b216bnVzd3NpcGZpaGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTAxNjYsImV4cCI6MjA3MTg4NjE2Nn0.Kk9qB8BKxIV7CgLZQdWW568MSpMjYtbceLQDfJvwttk'
-    }
+        return False, f"Error al iniciar sesión: {str(e)}"
 
 # ==============================================
-# Funciones de importación/exportación con Supabase (CORREGIDAS)
+# Funciones de importación/exportación con Supabase (VERSIÓN CORREGIDA)
 # ==============================================
 
 def save_to_supabase():
@@ -348,7 +292,7 @@ def save_to_supabase():
         return False
 
 def load_from_supabase():
-    """Carga datos desde Supabase (versión corregida)"""
+    """Carga datos desde Supabase"""
     if not check_authentication():
         st.error("Debes iniciar sesión para cargar datos")
         return False
@@ -379,6 +323,8 @@ def load_from_supabase():
     except Exception as e:
         st.warning(f"No se encontraron datos o error: {str(e)}")
         return False
+
+# Elimina completamente la función get_jwt_header ya que no la necesitas
 
 # Mantén las funciones de export/import originales como respaldo
 def export_data():
