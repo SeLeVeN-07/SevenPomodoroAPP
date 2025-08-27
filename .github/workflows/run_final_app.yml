@@ -1,4 +1,4 @@
-name: Run FINAL_APP
+name: Run FINAL_APP.py
 
 on:
   push:
