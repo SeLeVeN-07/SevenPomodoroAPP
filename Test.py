@@ -221,6 +221,10 @@ def convert_iso_to_dates(obj):
 # Funciones de autenticación y seguridad (VERSIÓN CORREGIDA)
 # ==============================================
 
+def hash_password(password):
+    """Hashea la contraseña usando SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
 def register_user(username, password):
     """Registra un nuevo usuario en Supabase usando service role key"""
     try:
@@ -264,6 +268,52 @@ def login_user(username, password):
         return False, "Contraseña incorrecta"
     except Exception as e:
         return False, f"Error al iniciar sesión: {str(e)}"
+
+def check_authentication():
+    """Verifica si el usuario está autenticado"""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'username' not in st.session_state:
+        st.session_state.username = None
+    return st.session_state.authenticated
+
+def auth_section():
+    """Muestra la sección de autenticación"""
+    with st.sidebar:
+        if not check_authentication():
+            st.title("🔒 Autenticación")
+            
+            tab1, tab2 = st.tabs(["Iniciar Sesión", "Registrarse"])
+            
+            with tab1:
+                with st.form("login_form"):
+                    username = st.text_input("Usuario")
+                    password = st.text_input("Contraseña", type="password")
+                    
+                    if st.form_submit_button("Iniciar Sesión"):
+                        success, message = login_user(username, password)
+                        if success:
+                            load_from_supabase()  # Carga datos tras login
+                            st.rerun()
+                        st.error(message if not success else "")
+            
+            with tab2:
+                with st.form("register_form"):
+                    new_user = st.text_input("Nuevo usuario")
+                    new_pass = st.text_input("Nueva contraseña", type="password")
+                    
+                    if st.form_submit_button("Registrarse"):
+                        if len(new_user) < 3:
+                            st.error("Usuario muy corto (mín. 3 caracteres)")
+                        elif len(new_pass) < 6:
+                            st.error("Contraseña muy corta (mín. 6 caracteres)")
+                        else:
+                            success, message = register_user(new_user, new_pass)
+                            if success:
+                                st.session_state.authenticated = True
+                                st.session_state.username = new_user
+                                st.rerun()
+                            st.error(message if not success else "")
 
 # ==============================================
 # Funciones de importación/exportación con Supabase (VERSIÓN CORREGIDA)
