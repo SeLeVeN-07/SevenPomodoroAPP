@@ -219,7 +219,7 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def register_user(username, password):
-    """Registra un nuevo usuario en Supabase (versión mejorada)"""
+    """Registra un nuevo usuario en Supabase"""
     try:
         # Verificar si el usuario ya existe
         response = supabase.table('users').select('username').eq('username', username).execute()
@@ -232,7 +232,7 @@ def register_user(username, password):
         response = supabase.table('users').insert({
             'username': username,
             'password_hash': hashed_pw,
-            'data': {}  # Inicializa data como objeto vacío
+            'data': convert_dates_to_iso(get_default_state())  # Inicializa con datos por defecto
         }).execute()
         
         return True, "Usuario registrado exitosamente"
