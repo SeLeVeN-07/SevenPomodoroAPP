@@ -247,10 +247,10 @@ def login_user(username, password):
         if not response.data:
             return False, "Usuario no encontrado"
         
-        user_data = response.data[0]
+        users = response.data[0]
         hashed_pw = hash_password(password)
         
-        if user_data['password_hash'] == hashed_pw:
+        if users['password_hash'] == hashed_pw:
             return True, "Inicio de sesión exitoso"
         else:
             return False, "Contraseña incorrecta"
@@ -341,7 +341,7 @@ def save_to_supabase():
         save_dict = convert_dates_to_iso(save_dict)
         
         # Guardar en Supabase
-        response = supabase.table('user_data').upsert({
+        response = supabase.table('users').upsert({
             'username': username,
             'data': save_dict
         }).execute()
@@ -361,7 +361,7 @@ def load_from_supabase():
     try:
         username = st.session_state.username
         # Obtener datos de Supabase
-        response = supabase.table('user_data').select('data').eq('username', username).execute()
+        response = supabase.table('users').select('data').eq('username', username).execute()
         
         if response.data:
             imported_data = response.data[0]['data']
