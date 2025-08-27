@@ -1516,9 +1516,6 @@ def sidebar():
         return
     
     state = st.session_state.pomodoro_state
-
-    with st.sidebar:
-        st.title("Pomodoro Pro 🍅")
         
         # Navegación por pestañas
         st.subheader("Navegación")
