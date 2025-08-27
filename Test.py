@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """
 Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
@@ -33,6 +32,184 @@ def init_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 supabase = init_supabase()
+
+# ==============================================
+# Configuración inicial y constantes
+# ==============================================
+
+# Configuración de la página
+st.set_page_config(
+    page_title="Pomodoro Pro",
+    page_icon="🍅",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Constantes
+THEMES = {
+    'Claro': {
+        'bg': '#ffffff', 'fg': '#000000', 'circle_bg': '#e0e0e0',
+        'text': '#333333', 'button_bg': '#f0f0f0', 'button_fg': '#000000',
+        'frame_bg': '#ffffff', 'canvas_bg': '#ffffff', 'progress': '#3498db',
+        'border': '#cccccc', 'highlight': '#dddddd', 'chart1': '#3498db',
+        'chart2': '#e74c3c', 'grid': '#eeeeee'
+    },
+    'Oscuro': {
+        'bg': '#2d2d2d', 'fg': '#ffffff', 'circle_bg': '#404040',
+        'text': '#e0e0e0', 'button_bg': '#505050', 'button_fg': '#ffffff',
+        'frame_bg': '#3d3d3d', 'canvas_bg': '#3d3d3d', 'progress': '#2980b9',
+        'border': '#606060', 'highlight': '#707070', 'chart1': '#2980b9',
+        'chart2': '#c0392b', 'grid': '#404040'
+    },
+    'Azul Profundo': {
+        'bg': '#1a1a2f', 'fg': '#ffffff', 'circle_bg': '#2a2a4f',
+        'text': '#b0b0ff', 'button_bg': '#3a3a6f', 'button_fg': '#ffffff',
+        'frame_bg': '#2a2a3f', 'canvas_bg': '#2a2a3f', 'progress': '#4a90e2',
+        'border': '#4a4a7f', 'highlight': '#5a5a8f', 'chart1': '#4a90e2',
+        'chart2': '#ff6b6b', 'grid': '#3a3a5f'
+    },
+    'Verde Naturaleza': {
+        'bg': '#1a2f1a', 'fg': '#e0ffe0', 'circle_bg': '#2a4f2a',
+        'text': '#b0ffb0', 'button_bg': '#3a6f3a', 'button_fg': '#ffffff',
+        'frame_bg': '#2a3f2a', 'canvas_bg': '#2a3f2a', 'progress': '#2ecc71',
+        'border': '#4a7f4a', 'highlight': '#5a8f5a', 'chart1': '#2ecc71',
+        'chart2': '#e67e22', 'grid': '#3a5f3a'
+    }
+}
+
+# ==============================================
+# Funciones de inicialización y utilidades
+# ==============================================
+
+def get_default_state():
+    """Devuelve el estado por defecto de la aplicación"""
+    return {
+        'work_duration': 45 * 60,
+        'short_break': 20 * 60,
+        'long_break': 30 * 60,
+        'sessions_before_long': 2,
+        'total_sessions': 4,
+        'session_count': 0,
+        'remaining_time': 25 * 60,
+        'current_phase': "Trabajo",
+        'total_active_time': 0,
+        'timer_running': False,
+        'timer_paused': False,
+        'start_time': None,
+        'paused_time': None,
+        'timer_start': None,
+        'last_update': None,
+        'current_theme': 'Claro',
+        'activities': [],
+        'current_activity': "",
+        'sub_activity': "",
+        'tasks': [],
+        'projects': [],
+        'current_project': "",
+        'deadlines': [],
+        'study_mode': False,
+        'study_goals': [],
+        'achievements': {
+            'pomodoros_completed': 0,
+            'tasks_completed': 0,
+            'streak_days': 0,
+            'total_hours': 0
+        },
+        'last_session_date': None,
+        'completed_tasks': [],
+        'editing_task': None,
+        'editing_project': None,
+        'dragging_item': None,
+        'drag_type': None,
+        'drag_source': None,
+        'session_history': []
+    }
+
+def format_time(seconds):
+    """Formatea segundos a formato MM:SS"""
+    mins = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{mins:02d}:{secs:02d}"
+
+def get_phase_color(phase):
+    """Devuelve el color correspondiente a cada fase"""
+    colors = {
+        "Trabajo": '#e74c3c',
+        'Descanso Corto': '#2ecc71',
+        'Descanso Largo': '#3498db'
+    }
+    return colors.get(phase, "#e74c3c")
+
+def get_phase_duration(phase):
+    """Devuelve la duración de cada fase"""
+    state = st.session_state.pomodoro_state
+    if phase == "Trabajo":
+        return state['work_duration']
+    elif phase == "Descanso Corto":
+        return state['short_break']
+    elif phase == "Descanso Largo":
+        return state['long_break']
+    else:
+        return state['work_duration']  # Valor por defecto
+
+def determine_next_phase(was_work):
+    """Determina la siguiente fase basándose en el estado actual"""
+    state = st.session_state.pomodoro_state
+    if not was_work:
+        return "Trabajo"
+    
+    # Calcular descanso según contador de sesiones
+    if state['session_count'] % state['sessions_before_long'] == 0:
+        return "Descanso Largo"
+    return "Descanso Corto"
+
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, (datetime.datetime, date)):
+        return obj.isoformat()
+    raise TypeError("Type %s not serializable" % type(obj))
+
+# ==============================================
+# Funciones de serialización/deserialización de fechas
+# ==============================================
+
+def convert_dates_to_iso(obj):
+    """
+    Recursively convert all date and datetime objects in the data to ISO strings.
+    """
+    if isinstance(obj, (date, datetime.datetime)):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: convert_dates_to_iso(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_dates_to_iso(element) for element in obj]
+    else:
+        return obj
+
+def convert_iso_to_dates(obj):
+    """
+    Recursively convert all ISO date strings in the data to date or datetime objects.
+    """
+    if isinstance(obj, str):
+        # Check if the string matches a date pattern
+        try:
+            # For date strings (YYYY-MM-DD)
+            if re.match(r'^\d{4}-\d{2}-\d{2}$', obj):
+                return datetime.datetime.strptime(obj, '%Y-%m-%d').date()
+            # For datetime strings (YYYY-MM-DDTHH:MM:SS or with microseconds and timezone)
+            elif re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', obj):
+                # Try parsing with datetime
+                return datetime.datetime.fromisoformat(obj.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            pass
+        return obj
+    elif isinstance(obj, dict):
+        return {k: convert_iso_to_dates(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_iso_to_dates(element) for element in obj]
+    else:
+        return obj
+
 # ==============================================
 # Funciones de autenticación y seguridad
 # ==============================================
@@ -105,6 +282,8 @@ def auth_section():
                     if success:
                         st.session_state.authenticated = True
                         st.session_state.username = login_username
+                        # Cargar datos del usuario después del login
+                        load_from_supabase()
                         st.success(message)
                         st.rerun()
                     else:
@@ -125,183 +304,6 @@ def auth_section():
                             st.success(message)
                         else:
                             st.error(message)
-        else:
-            st.title(f"👤 {st.session_state.username}")
-            if st.button("Cerrar Sesión"):
-                st.session_state.authenticated = False
-                st.session_state.username = None
-                st.session_state.pomodoro_state = get_default_state()
-                st.success("Sesión cerrada exitosamente")
-                st.rerun()
-
-# ==============================================
-# Funciones de serialización/deserialización de fechas
-# ==============================================
-
-def convert_dates_to_iso(obj):
-    """
-    Recursively convert all date and datetime objects in the data to ISO strings.
-    """
-    if isinstance(obj, (date, datetime.datetime)):
-        return obj.isoformat()
-    elif isinstance(obj, dict):
-        return {k: convert_dates_to_iso(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_dates_to_iso(element) for element in obj]
-    else:
-        return obj
-
-def convert_iso_to_dates(obj):
-    """
-    Recursively convert all ISO date strings in the data to date or datetime objects.
-    """
-    if isinstance(obj, str):
-        # Check if the string matches a date pattern
-        try:
-            # For date strings (YYYY-MM-DD)
-            if re.match(r'^\d{4}-\d{2}-\d{2}$', obj):
-                return datetime.datetime.strptime(obj, '%Y-%m-%d').date()
-            # For datetime strings (YYYY-MM-DDTHH:MM:SS or with microseconds and timezone)
-            elif re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', obj):
-                # Try parsing with datetime
-                return datetime.datetime.fromisoformat(obj.replace('Z', '+00:00'))
-        except (ValueError, AttributeError):
-            pass
-        return obj
-    elif isinstance(obj, dict):
-        return {k: convert_iso_to_dates(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_iso_to_dates(element) for element in obj]
-    else:
-        return obj
-
-def json_serial(obj):
-    """JSON serializer for objects not serializable by default json code"""
-    if isinstance(obj, (datetime.datetime, date)):
-        return obj.isoformat()
-    raise TypeError("Type %s not serializable" % type(obj))
-
-# Configuración de la página
-st.set_page_config(
-    page_title="Pomodoro Pro",
-    page_icon="🍅",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Constantes y configuración
-THEMES = {
-    'Claro': {
-        'bg': '#ffffff', 'fg': '#000000', 'circle_bg': '#e0e0e0',
-        'text': '#333333', 'button_bg': '#f0f0f0', 'button_fg': '#000000',
-        'frame_bg': '#ffffff', 'canvas_bg': '#ffffff', 'progress': '#3498db',
-        'border': '#cccccc', 'highlight': '#dddddd', 'chart1': '#3498db',
-        'chart2': '#e74c3c', 'grid': '#eeeeee'
-    },
-    'Oscuro': {
-        'bg': '#2d2d2d', 'fg': '#ffffff', 'circle_bg': '#404040',
-        'text': '#e0e0e0', 'button_bg': '#505050', 'button_fg': '#ffffff',
-        'frame_bg': '#3d3d3d', 'canvas_bg': '#3d3d3d', 'progress': '#2980b9',
-        'border': '#606060', 'highlight': '#707070', 'chart1': '#2980b9',
-        'chart2': '#c0392b', 'grid': '#404040'
-    },
-    'Azul Profundo': {
-        'bg': '#1a1a2f', 'fg': '#ffffff', 'circle_bg': '#2a2a4f',
-        'text': '#b0b0ff', 'button_bg': '#3a3a6f', 'button_fg': '#ffffff',
-        'frame_bg': '#2a2a3f', 'canvas_bg': '#2a2a3f', 'progress': '#4a90e2',
-        'border': '#4a4a7f', 'highlight': '#5a5a8f', 'chart1': '#4a90e2',
-        'chart2': '#ff6b6b', 'grid': '#3a3a5f'
-    },
-    'Verde Naturaleza': {
-        'bg': '#1a2f1a', 'fg': '#e0ffe0', 'circle_bg': '#2a4f2a',
-        'text': '#b0ffb0', 'button_bg': '#3a6f3a', 'button_fg': '#ffffff',
-        'frame_bg': '#2a3f2a', 'canvas_bg': '#2a3f2a', 'progress': '#2ecc71',
-        'border': '#4a7f4a', 'highlight': '#5a8f5a', 'chart1': '#2ecc71',
-        'chart2': '#e67e22', 'grid': '#3a5f3a'
-    }
-}
-
-# Inicialización del estado de la sesión
-if 'pomodoro_state' not in st.session_state:
-    st.session_state.pomodoro_state = {
-        'work_duration': 45 * 60,
-        'short_break': 20 * 60,
-        'long_break': 30 * 60,
-        'sessions_before_long': 2,
-        'total_sessions': 4,
-        'session_count': 0,
-        'remaining_time': 25 * 60,
-        'current_phase': "Trabajo",
-        'total_active_time': 0,
-        'timer_running': False,
-        'timer_paused': False,
-        'start_time': None,
-        'paused_time': None,
-        'timer_start': None,
-        'last_update': None,
-        'current_theme': 'Claro',
-        'activities': [],
-        'current_activity': "",
-        'sub_activity': "",
-        'tasks': [],
-        'projects': [],
-        'current_project': "",
-        'deadlines': [],
-        'study_mode': False,
-        'study_goals': [],
-        'achievements': {
-            'pomodoros_completed': 0,
-            'tasks_completed': 0,
-            'streak_days': 0,
-            'total_hours': 0
-        },
-        'last_session_date': None,
-        'completed_tasks': [],
-        'editing_task': None,
-        'editing_project': None,
-        'dragging_item': None,
-        'drag_type': None,
-        'drag_source': None,
-        'session_history': []
-    }
-
-# ==============================================
-# Funciones auxiliares
-# ==============================================
-
-def format_time(seconds):
-    mins = int(seconds // 60)
-    secs = int(seconds % 60)
-    return f"{mins:02d}:{secs:02d}"
-
-def get_phase_color(phase):
-    colors = {
-        "Trabajo": '#e74c3c',
-        'Descanso Corto': '#2ecc71',
-        'Descanso Largo': '#3498db'
-    }
-    return colors.get(phase, "#e74c3c")
-
-def get_phase_duration(phase):
-    state = st.session_state.pomodoro_state
-    if phase == "Trabajo":
-        return state['work_duration']
-    elif phase == "Descanso Corto":
-        return state['short_break']
-    elif phase == "Descanso Largo":
-        return state['long_break']
-    else:
-        return state['work_duration']  # Valor por defecto
-
-def determine_next_phase(was_work):
-    state = st.session_state.pomodoro_state
-    if not was_work:
-        return "Trabajo"
-    
-    # Calcular descanso según contador de sesiones
-    if state['session_count'] % state['sessions_before_long'] == 0:
-        return "Descanso Largo"
-    return "Descanso Corto"
 
 # ==============================================
 # Funciones de importación/exportación con Supabase
@@ -393,6 +395,7 @@ def load_from_supabase():
     except Exception as e:
         st.error(f"Error al cargar datos: {str(e)}")
         return False
+
 # Mantén las funciones de export/import originales como respaldo
 def export_data():
     """Exporta todos los datos a un JSON comprimido (backup local)"""
@@ -467,6 +470,7 @@ def import_data(uploaded_file):
 # ==============================================
 
 def log_session():
+    """Registra una sesión completada en el historial"""
     state = st.session_state.pomodoro_state
     if state['total_active_time'] >= 0.1:
         minutes = round(state['total_active_time'] / 60, 2)
@@ -537,6 +541,7 @@ def analyze_data():
 # ==============================================
 
 def edit_task_modal():
+    """Muestra el modal para editar una tarea"""
     state = st.session_state.pomodoro_state
     if state.get('editing_task'):
         task = state['editing_task']
@@ -591,6 +596,7 @@ def edit_task_modal():
                     st.rerun()
 
 def edit_project_modal():
+    """Muestra el modal para editar un proyecto"""
     state = st.session_state.pomodoro_state
     if state.get('editing_project'):
         project = state['editing_project']
@@ -635,6 +641,7 @@ def edit_project_modal():
 # ==============================================
 
 def hierarchical_view():
+    """Muestra la vista jerárquica de actividades, proyectos y tareas"""
     state = st.session_state.pomodoro_state
     
     st.subheader("🌳 Vista Jerárquica")
@@ -752,6 +759,7 @@ def hierarchical_view():
                             st.rerun()
 
 def display_filtered_tasks(filter_activity, filter_project, task_status):
+    """Muestra tareas filtradas con claves únicas para botones"""
     state = st.session_state.pomodoro_state
     
     # Aplicar filtros
@@ -795,7 +803,11 @@ def display_filtered_tasks(filter_activity, filter_project, task_status):
                         if st.button("✓", key=f"complete_{i}_{task['name']}_{task['project']}"):  # Clave única con índice
                             task['completed'] = True
                             task['completed_date'] = date.today()
-                            state['tasks'].remove(task)
+                            # Encontrar y eliminar la tarea de la lista original
+                            for t in state['tasks']:
+                                if t['name'] == task['name'] and t['project'] == task['project']:
+                                    state['tasks'].remove(t)
+                                    break
                             state['completed_tasks'].append(task)
                             state['achievements']['tasks_completed'] += 1
                             st.success("Tarea completada!")
@@ -817,6 +829,7 @@ def display_filtered_tasks(filter_activity, filter_project, task_status):
 # ==============================================
 
 def timer_tab():
+    """Muestra la pestaña del temporizador Pomodoro"""
     state = st.session_state.pomodoro_state
     
     # Mostrar materia actual si está en modo estudio
@@ -1068,6 +1081,7 @@ def timer_tab():
 # ==============================================
 
 def stats_tab():
+    """Muestra la pestaña de estadísticas"""
     st.title("📊 Estadísticas Avanzadas")
     
     if not st.session_state.pomodoro_state['session_history']:
@@ -1145,7 +1159,7 @@ def stats_tab():
             fig = px.line(
                 daily_totals, x='date', y='minutes',
                 title="Evolución del Tiempo por Día",
-                labels={'date': 'Fecha', 'minutes': 'Minutos'}
+                labels={'date': 'Fecha', 'minutes': 'Minutos}
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -1203,6 +1217,7 @@ def stats_tab():
 # ==============================================
 
 def tasks_tab():
+    """Muestra la pestaña de gestión de tareas"""
     state = st.session_state.pomodoro_state
     st.title("📋 Gestión de Tareas y Proyectos")
     
@@ -1253,6 +1268,7 @@ def tasks_tab():
 # ==============================================
 
 def show_achievements():
+    """Muestra la pestaña de logros"""
     state = st.session_state.pomodoro_state
     achievements = state['achievements']
     
@@ -1277,6 +1293,7 @@ def show_achievements():
 # ==============================================
 
 def settings_tab():
+    """Muestra la pestaña de configuración"""
     state = st.session_state.pomodoro_state
     
     st.title("⚙️ Configuración")
@@ -1374,6 +1391,7 @@ def settings_tab():
 # ==============================================
 
 def about_tab():
+    """Muestra la pestaña acerca de"""
     st.title("🍅 Acerca de Pomodoro Pro")
     
     st.markdown("""
@@ -1408,6 +1426,7 @@ def about_tab():
 # ==============================================
 
 def info_tab():
+    """Muestra la pestaña de información"""
     st.title("ℹ️ Información y Ayuda")
 
     tab1, tab2, tab3 = st.tabs(["Instrucciones", "FAQ", "Contacto"])
@@ -1504,18 +1523,17 @@ def check_alerts():
             st.sidebar.warning(alert)
 
 def sidebar():
-    state = st.session_state.pomodoro_state
-
-    with st.sidebar:
-        st.title("Pomodoro Pro 🍅")
-        
-        # Mostrar sección de autenticación
+    """Muestra la barra lateral con navegación y controles"""
+    # Mostrar sección de autenticación
     auth_section()
     
     if not check_authentication():
         return
     
     state = st.session_state.pomodoro_state
+
+    with st.sidebar:
+        st.title("Pomodoro Pro 🍅")
         
         # Navegación por pestañas
         st.subheader("Navegación")
@@ -1533,37 +1551,37 @@ def sidebar():
                                         value=state['study_mode'], 
                                         key="study_mode")
         
+        # Gestión de datos en la nube
+        st.subheader("☁️ Datos en la Nube")
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("💾 Guardar en nube", key="save_cloud"):
-                if username:
-                    save_to_supabase(username)
-                else:
-                    st.error("Por favor, ingresa un nombre de usuario")
+            if st.button("💾 Guardar", key="save_cloud"):
+                save_to_supabase()
         
         with col2:
-            if st.button("📂 Cargar desde nube", key="load_cloud"):
-                if username:
-                    load_from_supabase(username)
+            if st.button("📂 Cargar", key="load_cloud"):
+                if load_from_supabase():
                     st.rerun()
-                else:
-                    st.error("Por favor, ingresa un nombre de usuario")
-
-
-        # Mostrar alertas
-        check_alerts()
-
-        # Características de estudio
-        st.subheader("🎓 Modo Estudio")
-        state['study_mode'] = st.checkbox("Activar modo estudio", 
-                                        value=state['study_mode'], 
-                                        key="study_mode")
+        
+        # Cerrar sesión
+        st.divider()
+        if st.button("🚪 Cerrar Sesión", key="logout"):
+            st.session_state.authenticated = False
+            st.session_state.username = None
+            st.session_state.pomodoro_state = get_default_state()
+            st.success("Sesión cerrada exitosamente")
+            st.rerun()
 
 # ==============================================
 # Función principal
 # ==============================================
 
 def main():
+    """Función principal de la aplicación"""
+    # Inicializar el estado si no existe
+    if 'pomodoro_state' not in st.session_state:
+        st.session_state.pomodoro_state = get_default_state()
+    
     # Barra lateral
     sidebar()
     
@@ -1572,7 +1590,10 @@ def main():
         st.warning("Por favor inicia sesión o regístrate para acceder a Pomodoro Pro")
         return
 
-    # Obtener la pestaña seleccionada usando el key único
+    # Obtener la pestaña seleccionada
+    if 'sidebar_nav' not in st.session_state:
+        st.session_state.sidebar_nav = "🍅 Temporizador"
+    
     selected_tab = st.session_state.sidebar_nav
 
     # Mostrar la pestaña correspondiente
