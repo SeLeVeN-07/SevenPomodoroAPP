@@ -1626,7 +1626,8 @@ def check_alerts():
                 continue
     
     # 2. Verificar si hay sesiones de trabajo completadas recientemente
-    if state.get('session_history'):
+    # Verificar que session_history existe y tiene al menos un elemento
+    if state.get('session_history') and len(state['session_history']) > 0:
         last_session = state['session_history'][-1]
         
         # Manejar tanto fechas como strings para la fecha de sesión
