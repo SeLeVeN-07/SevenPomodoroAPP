@@ -1689,7 +1689,50 @@ def info_tab():
 # ==============================================
 # Barra lateral (Mejorada)
 # ==============================================
-
+def check_alerts():
+    """Verifica alertas y notificaciones para el usuario"""
+    state = st.session_state.pomodoro_state
+    alerts = []
+    
+    # Verificar tareas próximas a vencer
+    today = date.today()
+    for task in state['tasks']:
+        # Manejar tanto string como objeto date en el deadline
+        if isinstance(task['deadline'], str):
+            try:
+                deadline = datetime.datetime.strptime(task['deadline'], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+        else:
+            deadline = task['deadline']
+        
+        days_until_due = (deadline - today).days
+        if 0 <= days_until_due <= 2:
+            alerts.append(f"📅 Tarea '{task['name']}' vence en {days_until_due} días")
+    
+    # Verificar si hay sesiones de estudio hoy
+    today_str = today.strftime("%Y-%m-%d")
+    sessions_today = 0
+    for session in state['session_history']:
+        # Manejar diferentes formatos de fecha en el historial
+        session_date = session['Fecha']
+        if isinstance(session_date, str):
+            if session_date == today_str:
+                sessions_today += 1
+        elif isinstance(session_date, (datetime.date, datetime.datetime)):
+            session_date_str = session_date.strftime("%Y-%m-%d") if isinstance(session_date, datetime.date) else session_date.date().strftime("%Y-%m-%d")
+            if session_date_str == today_str:
+                sessions_today += 1
+    
+    if sessions_today == 0:
+        alerts.append("ℹ️ Aún no has tenido sesiones de estudio hoy")
+    
+    # Verificar racha de estudio
+    if state['achievements']['streak_days'] > 0:
+        alerts.append(f"🔥 ¡Llevas una racha de {state['achievements']['streak_days']} días!")
+    
+    return alerts
+    
 def sidebar():
     """Muestra la barra lateral con navegación y controles"""
     # Mostrar sección de autenticación
@@ -1703,7 +1746,12 @@ def sidebar():
     with st.sidebar:
         st.title("Pomodoro Pro 🍅")
         
-        # Eliminada la sección de alertas problemática
+        # Mostrar alertas si existen
+        alerts = check_alerts()
+        if alerts:
+            st.subheader("🔔 Alertas")
+            for alert in alerts:
+                st.warning(alert, icon="⚠️")
         
         # Navegación por pestañas
         st.subheader("Navegación")
