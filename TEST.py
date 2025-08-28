@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
-Versión Mejorada y Optimizada
+Versión Mejorada y Optimizada con Migración de Contraseñas
 """
 import streamlit as st
 import pandas as pd
@@ -39,15 +39,6 @@ if not all([SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY]):
     st.error("""
     ❌ Error de configuración de Supabase:
     Las claves de Supabase no están configuradas correctamente.
-    Para desarrollo local, configura estas variables de entorno:
-    - SUPABASE_URL
-    - SUPABASE_ANON_KEY  
-    - SUPABASE_SERVICE_KEY
-    
-    Para producción en Streamlit Cloud, configura los secrets en la configuración de la app:
-    - SUPABASE_URL
-    - SUPABASE_ANON_KEY
-    - SUPABASE_SERVICE_KEY
     """)
     st.stop()
 
@@ -251,18 +242,41 @@ def convert_iso_to_dates(obj):
 # Funciones de autenticación y seguridad (Mejoradas)
 # ==============================================
 
+def hash_password_old(password):
+    """Hashea la contraseña usando SHA-256 (método antiguo)"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
 def hash_password(password):
-    """Hashea la contraseña usando SHA-256 con salt"""
+    """Hashea la contraseña usando PBKDF2 con salt (método nuevo)"""
     salt = os.urandom(32)
     key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 100000)
     return salt + key
 
 def verify_password(stored_password, provided_password):
     """Verifica si la contraseña proporcionada coincide con la almacenada"""
+    # Primero verificar si es el formato antiguo
+    if len(stored_password) == 64:  # Formato antiguo (SHA256)
+        return stored_password == hash_password_old(provided_password)
+    
+    # Formato nuevo (PBKDF2 con salt)
     salt = stored_password[:32]
     stored_key = stored_password[32:]
     key = hashlib.pbkdf2_hmac('sha256', provided_password.encode('utf-8'), salt, 100000)
     return key == stored_key
+
+def migrate_password(user_id, username, password):
+    """Migra una contraseña del formato antiguo al nuevo"""
+    try:
+        new_hash = hash_password(password)
+        response = supabase_service.table('users').update({
+            'password_hash': new_hash.hex()
+        }).eq('id', user_id).execute()
+        
+        st.success(f"Contraseña migrada para el usuario {username}")
+        return True
+    except Exception as e:
+        st.error(f"Error al migrar contraseña: {str(e)}")
+        return False
 
 def register_user(username, password):
     """Registra un nuevo usuario en Supabase usando service role key"""
@@ -298,14 +312,26 @@ def login_user(username, password):
             return False, "Usuario no encontrado"
             
         user = response.data[0]
+        stored_password_hex = user['password_hash']
+        
+        # Convertir a bytes para verificación
+        try:
+            stored_password = bytes.fromhex(stored_password_hex)
+        except:
+            # Si no es hexadecimal, podría ser el formato antiguo
+            stored_password = stored_password_hex.encode()
         
         # Verificar contraseña
-        stored_password = bytes.fromhex(user['password_hash'])
         if verify_password(stored_password, password):
+            # Si la contraseña es correcta pero está en formato antiguo, migrar
+            if len(stored_password_hex) == 64:  # Formato antiguo
+                migrate_password(user['id'], username, password)
+            
             st.session_state.authenticated = True
             st.session_state.username = username
             st.session_state.user_id = user['id']
             return True, "Inicio de sesión exitoso"
+        
         return False, "Contraseña incorrecta"
     except Exception as e:
         return False, f"Error al iniciar sesión: {str(e)}"
@@ -1064,7 +1090,7 @@ def timer_tab():
             state['timer_paused'] = False
             st.session_state.force_rerun = True
 
-        # Contador de sesiones
+        # Contrador de sesiones
     st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
 
     # Actualizar el temporizador si está en ejecución
