@@ -1592,7 +1592,7 @@ def info_tab():
         ### Versión
         Estás usando la versión 1.0.0 de Pomodoro Pro
         """)
-#==============================================
+# ==============================================
 # Barra lateral (Mejorada)
 # ==============================================
 
@@ -1642,7 +1642,6 @@ def sidebar():
         st.divider()
         if st.button("🚪 Cerrar Sesión", key="logout"):
             logout()
-
 # ==============================================
 # Función principal (Mejorada)
 # ==============================================
