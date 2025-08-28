@@ -1597,6 +1597,10 @@ def info_tab():
 # Barra lateral (Mejorada)
 # ==============================================
 
+d# ==============================================
+# Barra lateral (Mejorada)
+# ==============================================
+
 def sidebar():
     """Muestra la barra lateral con navegación y controles"""
     # Mostrar sección de autenticación
@@ -1610,6 +1614,7 @@ def sidebar():
     with st.sidebar:
         st.title("Pomodoro Pro 🍅")
         
+        # Eliminada la sección de alertas problemática
         
         # Navegación por pestañas
         st.subheader("Navegación")
