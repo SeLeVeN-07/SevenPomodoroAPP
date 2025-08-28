@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
-Versión Mejorada
+Versión Mejorada y Optimizada con Migración de Contraseñas
 """
 import streamlit as st
 import pandas as pd
@@ -23,6 +23,7 @@ from collections import defaultdict
 from supabase import create_client, Client
 import hashlib
 import os
+from typing import Dict, List, Any, Optional
 
 # Configuración de Supabase - LEER DESDE SECRETS
 try:
@@ -69,7 +70,6 @@ if supabase is None or supabase_service is None:
 # Configuración inicial y constantes
 # ==============================================
 
-# Configuración de la página
 st.set_page_config(
     page_title="Pomodoro Pro",
     page_icon="🍅",
@@ -77,7 +77,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Constantes
 THEMES = {
     'Claro': {
         'bg': '#ffffff', 'fg': '#000000', 'circle_bg': '#e0e0e0',
@@ -184,7 +183,7 @@ def get_phase_duration(phase):
     elif phase == "Descanso Largo":
         return state['long_break']
     else:
-        return state['work_duration']  # Valor por defecto
+        return state['work_duration']
 
 def determine_next_phase(was_work):
     """Determina la siguiente fase basándose en el estado actual"""
@@ -192,7 +191,6 @@ def determine_next_phase(was_work):
     if not was_work:
         return "Trabajo"
     
-    # Calcular descanso según contador de sesiones
     if state['session_count'] % state['sessions_before_long'] == 0:
         return "Descanso Largo"
     return "Descanso Corto"
@@ -225,14 +223,10 @@ def convert_iso_to_dates(obj):
     Recursively convert all ISO date strings in the data to date or datetime objects.
     """
     if isinstance(obj, str):
-        # Check if the string matches a date pattern
         try:
-            # For date strings (YYYY-MM-DD)
             if re.match(r'^\d{4}-\d{2}-\d{2}$', obj):
                 return datetime.datetime.strptime(obj, '%Y-%m-%d').date()
-            # For datetime strings (YYYY-MM-DDTHH:MM:SS or with microseconds and timezone)
             elif re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', obj):
-                # Try parsing with datetime
                 return datetime.datetime.fromisoformat(obj.replace('Z', '+00:00'))
         except (ValueError, AttributeError):
             pass
@@ -408,12 +402,9 @@ def save_to_supabase():
         state = st.session_state.pomodoro_state.copy()
         username = st.session_state.username
         
-        # Asegurar que completed_tasks está incluido en los datos
-        data_to_save = convert_dates_to_iso(state)
-        
-        # Usar UPDATE en lugar de UPSERT para no afectar password_hash
+        # Usar UPDATE en lugar de UPSERT
         response = supabase_service.table('users').update({
-            'data': data_to_save,  # Guardar todo el estado, incluyendo completed_tasks
+            'data': convert_dates_to_iso(state),
             'last_updated': datetime.datetime.now().isoformat()
         }).eq('username', username).execute()
         
@@ -444,10 +435,10 @@ def load_from_supabase():
             
         imported_data = convert_iso_to_dates(response.data[0]['data'])
         
-        # Actualiza el estado completo, incluyendo completed_tasks
-        for key in imported_data.keys():
+        # Actualiza el estado
+        for key, value in imported_data.items():
             if key in st.session_state.pomodoro_state:
-                st.session_state.pomodoro_state[key] = imported_data[key]
+                st.session_state.pomodoro_state[key] = value
         
         st.success("Datos cargados correctamente!")
         return True
@@ -455,117 +446,16 @@ def load_from_supabase():
         st.warning(f"No se encontraron datos o error: {str(e)}")
         return False
 
-def export_data():
-    """Exporta todos los datos a un JSON comprimido (backup local)"""
-    state = st.session_state.pomodoro_state.copy()
-    
-    # Preparar datos para exportación - incluir completed_tasks
-    export_dict = {
-        'activities': state['activities'],
-        'tasks': state['tasks'],
-        'completed_tasks': state['completed_tasks'],  # Asegurar que se incluyen
-        'projects': state['projects'],
-        'achievements': state['achievements'],
-        'session_history': state['session_history'],
-        'settings': {
-            'work_duration': state['work_duration'],
-            'short_break': state['short_break'],
-            'long_break': state['long_break'],
-            'sessions_before_long': state['sessions_before_long'],
-            'total_sessions': state['total_sessions'],
-            'current_theme': state['current_theme']
-        }
-    }
-    
-    # Resto del código sin cambios...
-    # Convertir fechas a formato ISO
-    export_dict = convert_dates_to_iso(export_dict)
-    
-    # Convertir a JSON y comprimir
-    json_str = json.dumps(export_dict, indent=2, ensure_ascii=False, default=json_serial)
-    compressed = gzip.compress(json_str.encode('utf-8'))
-    
-    # Crear archivo descargable
-    b64 = base64.b64encode(compressed).decode()
-    href = f'<a href="data:application/gzip;base64,{b64}" download="pomodoro_backup.json.gz">Descargar backup</a>'
-    st.markdown(href, unsafe_allow_html=True)
-
-def import_data(uploaded_file):
-    """Importa datos desde un archivo JSON comprimido (backup local)"""
-    try:
-        # Descomprimir y cargar
-        compressed = uploaded_file.read()
-        json_str = gzip.decompress(compressed).decode('utf-8')
-        imported_data = json.loads(json_str)
-        
-        # Convertir cadenas ISO a objetos fecha
-        imported_data = convert_iso_to_dates(imported_data)
-        
-        # Actualizar estado - incluir completed_tasks
-        state = st.session_state.pomodoro_state
-        state['activities'] = imported_data.get('activities', [])
-        state['tasks'] = imported_data.get('tasks', [])
-        state['completed_tasks'] = imported_data.get('completed_tasks', [])  # Asegurar carga
-        state['projects'] = imported_data.get('projects', [])
-        state['achievements'] = imported_data.get('achievements', state['achievements'])
-        state['session_history'] = imported_data.get('session_history', [])
-        
-        # Configuración
-        settings = imported_data.get('settings', {})
-        state['work_duration'] = settings.get('work_duration', 25*60)
-        state['short_break'] = settings.get('short_break', 5*60)
-        state['long_break'] = settings.get('long_break', 15*60)
-        state['sessions_before_long'] = settings.get('sessions_before_long', 4)
-        state['total_sessions'] = settings.get('total_sessions', 8)
-        state['current_theme'] = settings.get('current_theme', 'Claro')
-        
-        st.success("Datos importados correctamente!")
-        st.session_state.force_rerun = True
-    except Exception as e:
-        st.error(f"Error al importar datos: {str(e)}")
-
-def load_from_supabase():
-    """Carga datos desde Supabase"""
-    if not check_authentication():
-        st.error("Debes iniciar sesión para cargar datos")
-        return False
-    
-    try:
-        username = st.session_state.username
-        
-        # Usar cliente de servicio para bypass RLS
-        response = supabase_service.table('users') \
-            .select('data') \
-            .eq('username', username) \
-            .execute()
-        
-        if not response.data:
-            st.warning("No se encontraron datos para este usuario")
-            return False
-            
-        imported_data = convert_iso_to_dates(response.data[0]['data'])
-        
-        # Actualiza el estado completo, incluyendo completed_tasks
-        for key in imported_data.keys():
-            if key in st.session_state.pomodoro_state:
-                st.session_state.pomodoro_state[key] = imported_data[key]
-        
-        st.success("Datos cargados correctamente!")
-        return True
-    except Exception as e:
-        st.warning(f"No se encontraron datos o error: {str(e)}")
-        return False
-        
 # Funciones de export/import originales como respaldo
 def export_data():
     """Exporta todos los datos a un JSON comprimido (backup local)"""
     state = st.session_state.pomodoro_state.copy()
     
-    # Preparar datos para exportación - incluir completed_tasks
+    # Preparar datos para exportación
     export_dict = {
         'activities': state['activities'],
         'tasks': state['tasks'],
-        'completed_tasks': state['completed_tasks'],  # Asegurar que se incluyen
+        'completed_tasks': state['completed_tasks'],
         'projects': state['projects'],
         'achievements': state['achievements'],
         'session_history': state['session_history'],
@@ -602,11 +492,11 @@ def import_data(uploaded_file):
         # Convertir cadenas ISO a objetos fecha
         imported_data = convert_iso_to_dates(imported_data)
         
-        # Actualizar estado - incluir completed_tasks
+        # Actualizar estado
         state = st.session_state.pomodoro_state
         state['activities'] = imported_data.get('activities', [])
         state['tasks'] = imported_data.get('tasks', [])
-        state['completed_tasks'] = imported_data.get('completed_tasks', [])  # Asegurar carga
+        state['completed_tasks'] = imported_data.get('completed_tasks', [])
         state['projects'] = imported_data.get('projects', [])
         state['achievements'] = imported_data.get('achievements', state['achievements'])
         state['session_history'] = imported_data.get('session_history', [])
@@ -624,7 +514,6 @@ def import_data(uploaded_file):
         st.session_state.force_rerun = True
     except Exception as e:
         st.error(f"Error al importar datos: {str(e)}")
-
 
 # ==============================================
 # Funciones de registro de sesiones (Mejoradas)
@@ -1201,7 +1090,7 @@ def timer_tab():
             state['timer_paused'] = False
             st.session_state.force_rerun = True
 
-        # Contador de sesiones
+        # Contrador de sesiones
     st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
 
     # Actualizar el temporizador si está en ejecución
@@ -1795,7 +1684,7 @@ def main():
             info_tab()
 
     # Control de rerun
-    if st.session_state.force_rerun:
+    if st.session_state.get('force_rerun', False):
         st.session_state.force_rerun = False
         st.rerun()
 
