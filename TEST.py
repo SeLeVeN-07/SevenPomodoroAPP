@@ -1108,9 +1108,8 @@ def timer_tab():
                 st.session_state.force_rerun = True
 
     # Forzar actualización de la interfaz si es necesario
-    if st.session_state.get('force_rerun', False):
-        st.session_state.force_rerun = False
-        st.rerun()
+    time.sleep(0.1)
+    st.rerun()
 
 # ==============================================
 # Pestaña de Estadísticas (Mejorada)
