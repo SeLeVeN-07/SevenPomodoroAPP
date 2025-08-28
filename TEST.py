@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
-Versión Mejorada
+Versión Mejorada con correcciones de timer
 """
 import streamlit as st
 import pandas as pd
@@ -334,12 +334,9 @@ def save_to_supabase():
         state = st.session_state.pomodoro_state.copy()
         username = st.session_state.username
         
-        # Asegurar que completed_tasks está incluido en los datos
-        data_to_save = convert_dates_to_iso(state)
-        
         # Usar UPDATE en lugar de UPSERT para no afectar password_hash
         response = supabase_service.table('users').update({
-            'data': data_to_save,  # Guardar todo el estado, incluyendo completed_tasks
+            'data': convert_dates_to_iso(state),
             'last_updated': datetime.datetime.now().isoformat()
         }).eq('username', username).execute()
         
@@ -370,10 +367,11 @@ def load_from_supabase():
             
         imported_data = convert_iso_to_dates(response.data[0]['data'])
         
-        # Actualiza el estado completo, incluyendo completed_tasks
-        for key in imported_data.keys():
-            if key in st.session_state.pomodoro_state:
-                st.session_state.pomodoro_state[key] = imported_data[key]
+        # Actualiza el estado
+        state_fields = ['activities', 'tasks', 'projects', 'achievements', 'session_history']
+        for field in state_fields:
+            if field in imported_data:
+                st.session_state.pomodoro_state[field] = imported_data[field]
         
         st.success("Datos cargados correctamente!")
         return True
@@ -381,117 +379,16 @@ def load_from_supabase():
         st.warning(f"No se encontraron datos o error: {str(e)}")
         return False
 
-def export_data():
-    """Exporta todos los datos a un JSON comprimido (backup local)"""
-    state = st.session_state.pomodoro_state.copy()
-    
-    # Preparar datos para exportación - incluir completed_tasks
-    export_dict = {
-        'activities': state['activities'],
-        'tasks': state['tasks'],
-        'completed_tasks': state['completed_tasks'],  # Asegurar que se incluyen
-        'projects': state['projects'],
-        'achievements': state['achievements'],
-        'session_history': state['session_history'],
-        'settings': {
-            'work_duration': state['work_duration'],
-            'short_break': state['short_break'],
-            'long_break': state['long_break'],
-            'sessions_before_long': state['sessions_before_long'],
-            'total_sessions': state['total_sessions'],
-            'current_theme': state['current_theme']
-        }
-    }
-    
-    # Resto del código sin cambios...
-    # Convertir fechas a formato ISO
-    export_dict = convert_dates_to_iso(export_dict)
-    
-    # Convertir a JSON y comprimir
-    json_str = json.dumps(export_dict, indent=2, ensure_ascii=False, default=json_serial)
-    compressed = gzip.compress(json_str.encode('utf-8'))
-    
-    # Crear archivo descargable
-    b64 = base64.b64encode(compressed).decode()
-    href = f'<a href="data:application/gzip;base64,{b64}" download="pomodoro_backup.json.gz">Descargar backup</a>'
-    st.markdown(href, unsafe_allow_html=True)
-
-def import_data(uploaded_file):
-    """Importa datos desde un archivo JSON comprimido (backup local)"""
-    try:
-        # Descomprimir y cargar
-        compressed = uploaded_file.read()
-        json_str = gzip.decompress(compressed).decode('utf-8')
-        imported_data = json.loads(json_str)
-        
-        # Convertir cadenas ISO a objetos fecha
-        imported_data = convert_iso_to_dates(imported_data)
-        
-        # Actualizar estado - incluir completed_tasks
-        state = st.session_state.pomodoro_state
-        state['activities'] = imported_data.get('activities', [])
-        state['tasks'] = imported_data.get('tasks', [])
-        state['completed_tasks'] = imported_data.get('completed_tasks', [])  # Asegurar carga
-        state['projects'] = imported_data.get('projects', [])
-        state['achievements'] = imported_data.get('achievements', state['achievements'])
-        state['session_history'] = imported_data.get('session_history', [])
-        
-        # Configuración
-        settings = imported_data.get('settings', {})
-        state['work_duration'] = settings.get('work_duration', 25*60)
-        state['short_break'] = settings.get('short_break', 5*60)
-        state['long_break'] = settings.get('long_break', 15*60)
-        state['sessions_before_long'] = settings.get('sessions_before_long', 4)
-        state['total_sessions'] = settings.get('total_sessions', 8)
-        state['current_theme'] = settings.get('current_theme', 'Claro')
-        
-        st.success("Datos importados correctamente!")
-        st.session_state.force_rerun = True
-    except Exception as e:
-        st.error(f"Error al importar datos: {str(e)}")
-
-def load_from_supabase():
-    """Carga datos desde Supabase"""
-    if not check_authentication():
-        st.error("Debes iniciar sesión para cargar datos")
-        return False
-    
-    try:
-        username = st.session_state.username
-        
-        # Usar cliente de servicio para bypass RLS
-        response = supabase_service.table('users') \
-            .select('data') \
-            .eq('username', username) \
-            .execute()
-        
-        if not response.data:
-            st.warning("No se encontraron datos para este usuario")
-            return False
-            
-        imported_data = convert_iso_to_dates(response.data[0]['data'])
-        
-        # Actualiza el estado completo, incluyendo completed_tasks
-        for key in imported_data.keys():
-            if key in st.session_state.pomodoro_state:
-                st.session_state.pomodoro_state[key] = imported_data[key]
-        
-        st.success("Datos cargados correctamente!")
-        return True
-    except Exception as e:
-        st.warning(f"No se encontraron datos o error: {str(e)}")
-        return False
-        
 # Funciones de export/import originales como respaldo
 def export_data():
     """Exporta todos los datos a un JSON comprimido (backup local)"""
     state = st.session_state.pomodoro_state.copy()
     
-    # Preparar datos para exportación - incluir completed_tasks
+    # Preparar datos para exportación
     export_dict = {
         'activities': state['activities'],
         'tasks': state['tasks'],
-        'completed_tasks': state['completed_tasks'],  # Asegurar que se incluyen
+        'completed_tasks': state['completed_tasks'],
         'projects': state['projects'],
         'achievements': state['achievements'],
         'session_history': state['session_history'],
@@ -528,11 +425,11 @@ def import_data(uploaded_file):
         # Convertir cadenas ISO a objetos fecha
         imported_data = convert_iso_to_dates(imported_data)
         
-        # Actualizar estado - incluir completed_tasks
+        # Actualizar estado
         state = st.session_state.pomodoro_state
         state['activities'] = imported_data.get('activities', [])
         state['tasks'] = imported_data.get('tasks', [])
-        state['completed_tasks'] = imported_data.get('completed_tasks', [])  # Asegurar carga
+        state['completed_tasks'] = imported_data.get('completed_tasks', [])
         state['projects'] = imported_data.get('projects', [])
         state['achievements'] = imported_data.get('achievements', state['achievements'])
         state['session_history'] = imported_data.get('session_history', [])
@@ -550,7 +447,6 @@ def import_data(uploaded_file):
         st.session_state.force_rerun = True
     except Exception as e:
         st.error(f"Error al importar datos: {str(e)}")
-
 
 # ==============================================
 # Funciones de registro de sesiones (Mejoradas)
@@ -624,8 +520,29 @@ def analyze_data():
             print(f"Error procesando entrada: {e}")
     return data
 
+def on_close():
+    """Función que se ejecuta al cerrar la aplicación"""
+    if check_authentication():
+        # Verificar si el timer estaba corriendo y si hay un start_time válido
+        state = st.session_state.pomodoro_state
+        if state['timer_running'] and state['start_time'] is not None:
+            # Calcular el tiempo activo hasta el momento de cierre
+            current_elapsed = time.time() - state['start_time'].timestamp()
+            state['total_active_time'] += current_elapsed
+        
+        # Solo registrar si fue fase de trabajo y hay tiempo acumulado
+        if state['current_phase'] == "Trabajo" and state['total_active_time'] >= 0.1:
+            log_session()
+        
+        # Guardar el estado en Supabase
+        save_to_supabase()
+
 def logout():
     """Cierra sesión limpiando todo"""
+    # Guardar el estado actual antes de cerrar sesión
+    if check_authentication():
+        on_close()
+    
     st.session_state.clear()
     st.session_state.pomodoro_state = get_default_state()
     st.session_state.force_rerun = True
@@ -931,6 +848,14 @@ def timer_tab():
     """Muestra la pestaña del temporizador Pomodoro"""
     state = st.session_state.pomodoro_state
     
+    # Inicializar variables de control del temporizador si no existen
+    if 'timer_start' not in st.session_state:
+        st.session_state.timer_start = None
+    if 'last_update' not in st.session_state:
+        st.session_state.last_update = None
+    if 'paused_time' not in st.session_state:
+        st.session_state.paused_time = None
+    
     # Mostrar materia actual si está en modo estudio
     if state['study_mode'] and state['current_activity']:
         st.header(f"Actividad: {state['current_activity']}")
@@ -1083,6 +1008,7 @@ def timer_tab():
                 # Iniciar el temporizador
                 st.session_state.timer_start = time.time()
                 st.session_state.last_update = time.time()
+                save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
 
     with col2:
@@ -1091,13 +1017,16 @@ def timer_tab():
             if state['timer_running'] and not state['timer_paused']:
                 state['timer_paused'] = True
                 state['paused_time'] = time.time()
+                st.session_state.paused_time = time.time()
+                save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
             elif state['timer_paused']:
                 state['timer_paused'] = False
                 # Ajustar el tiempo de inicio para compensar la pausa
-                pause_duration = time.time() - state['paused_time']
+                pause_duration = time.time() - st.session_state.paused_time
                 st.session_state.timer_start += pause_duration
                 st.session_state.last_update = time.time()
+                save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
 
     with col3:
@@ -1117,6 +1046,7 @@ def timer_tab():
                     state['remaining_time'] = state['work_duration']
                     state['timer_running'] = False
                     state['timer_paused'] = False
+                    save_to_supabase()  # Guardar estado
                     st.session_state.force_rerun = True
             
             # Determinar siguiente fase
@@ -1125,6 +1055,7 @@ def timer_tab():
             state['total_active_time'] = 0
             state['timer_running'] = False
             state['timer_paused'] = False
+            save_to_supabase()  # Guardar estado
             st.session_state.force_rerun = True
 
         # Contador de sesiones
@@ -1133,10 +1064,10 @@ def timer_tab():
     # Actualizar el temporizador si está en ejecución
     if state['timer_running'] and not state['timer_paused']:
         current_time = time.time()
-        elapsed = current_time - st.session_state.last_update
         
-        # Solo actualizar si ha pasado al menos 0.5 segundos
-        if elapsed >= 0.5:
+        # Solo actualizar si ha pasado al menos 1 segundo
+        if current_time - st.session_state.last_update >= 1.0:
+            elapsed = current_time - st.session_state.last_update
             st.session_state.last_update = current_time
 
             state['remaining_time'] -= elapsed
@@ -1158,6 +1089,7 @@ def timer_tab():
                         state['remaining_time'] = state['work_duration']
                         state['timer_running'] = False
                         state['timer_paused'] = False
+                        save_to_supabase()  # Guardar estado
                         st.session_state.force_rerun = True
                 
                 # Determinar siguiente fase
@@ -1172,6 +1104,7 @@ def timer_tab():
                 else:
                     st.toast("¡Descanso completado! Volvamos al trabajo.", icon="💪")
                 
+                save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
 
     # Forzar actualización de la interfaz si es necesario
@@ -1262,7 +1195,7 @@ def stats_tab():
             fig = px.line(
                 daily_totals, x='date', y='minutes',
                 title="Evolución del Tiempo por Día",
-                labels={'date': 'Fecha', 'minutes': 'Minutos'}
+                labels={'date': 'Fecha', 'minutes': 'Minutos}
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -1667,11 +1600,7 @@ def sidebar():
         # Cerrar sesión
         st.divider()
         if st.button("🚪 Cerrar Sesión", key="logout"):
-            st.session_state.authenticated = False
-            st.session_state.username = None
-            st.session_state.pomodoro_state = get_default_state()
-            st.success("Sesión cerrada exitosamente")
-            st.session_state.force_rerun = True
+            logout()
 
 # ==============================================
 # Función principal (Mejorada)
