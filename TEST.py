@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
-Versión Mejorada y Optimizada
+Versión Mejorada
 """
 import streamlit as st
 import pandas as pd
@@ -23,62 +23,30 @@ from collections import defaultdict
 from supabase import create_client, Client
 import hashlib
 import os
-from typing import Dict, List, Any, Optional
 
-# Configuración de Supabase - LEER DESDE SECRETS
-try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
-    SUPABASE_SERVICE_KEY = st.secrets["SUPABASE_SERVICE_KEY"]
-except (KeyError, FileNotFoundError):
-    SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-    SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-    SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+# Configuración de Supabase (usa variables de entorno para seguridad)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://zgvptomznuswsipfihho.supabase.co")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "tu_anon_key")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "tu_service_key")
 
-if not all([SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY]):
-    st.error("""
-    ❌ Error de configuración de Supabase:
-    Las claves de Supabase no están configuradas correctamente.
-    Para desarrollo local, configura estas variables de entorno:
-    - SUPABASE_URL
-    - SUPABASE_ANON_KEY  
-    - SUPABASE_SERVICE_KEY
-    
-    Para producción en Streamlit Cloud, configura los secrets en la configuración de la app:
-    - SUPABASE_URL
-    - SUPABASE_ANON_KEY
-    - SUPABASE_SERVICE_KEY
-    """)
-    st.stop()
-
-# Inicializar cliente de Supabase
+# Inicializar cliente de Supabase para operaciones normales
 @st.cache_resource
 def init_supabase():
-    try:
-        return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-    except Exception as e:
-        st.error(f"Error inicializando Supabase: {str(e)}")
-        return None
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
+# Cliente especial para operaciones que necesitan bypass RLS (como registro)
 @st.cache_resource
 def init_supabase_service():
-    try:
-        return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    except Exception as e:
-        st.error(f"Error inicializando Supabase Service: {str(e)}")
-        return None
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 supabase = init_supabase()
 supabase_service = init_supabase_service()
-
-if supabase is None or supabase_service is None:
-    st.error("No se pudo inicializar la conexión a Supabase. Verifica tus claves de API.")
-    st.stop()
 
 # ==============================================
 # Configuración inicial y constantes
 # ==============================================
 
+# Configuración de la página
 st.set_page_config(
     page_title="Pomodoro Pro",
     page_icon="🍅",
@@ -86,6 +54,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Constantes
 THEMES = {
     'Claro': {
         'bg': '#ffffff', 'fg': '#000000', 'circle_bg': '#e0e0e0',
@@ -192,7 +161,7 @@ def get_phase_duration(phase):
     elif phase == "Descanso Largo":
         return state['long_break']
     else:
-        return state['work_duration']
+        return state['work_duration']  # Valor por defecto
 
 def determine_next_phase(was_work):
     """Determina la siguiente fase basándose en el estado actual"""
@@ -200,6 +169,7 @@ def determine_next_phase(was_work):
     if not was_work:
         return "Trabajo"
     
+    # Calcular descanso según contador de sesiones
     if state['session_count'] % state['sessions_before_long'] == 0:
         return "Descanso Largo"
     return "Descanso Corto"
@@ -232,10 +202,14 @@ def convert_iso_to_dates(obj):
     Recursively convert all ISO date strings in the data to date or datetime objects.
     """
     if isinstance(obj, str):
+        # Check if the string matches a date pattern
         try:
+            # For date strings (YYYY-MM-DD)
             if re.match(r'^\d{4}-\d{2}-\d{2}$', obj):
                 return datetime.datetime.strptime(obj, '%Y-%m-%d').date()
+            # For datetime strings (YYYY-MM-DDTHH:MM:SS or with microseconds and timezone)
             elif re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', obj):
+                # Try parsing with datetime
                 return datetime.datetime.fromisoformat(obj.replace('Z', '+00:00'))
         except (ValueError, AttributeError):
             pass
@@ -252,22 +226,13 @@ def convert_iso_to_dates(obj):
 # ==============================================
 
 def hash_password(password):
-    """Hashea la contraseña usando SHA-256 con salt"""
-    salt = os.urandom(32)
-    key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 100000)
-    return salt + key
-
-def verify_password(stored_password, provided_password):
-    """Verifica si la contraseña proporcionada coincide con la almacenada"""
-    salt = stored_password[:32]
-    stored_key = stored_password[32:]
-    key = hashlib.pbkdf2_hmac('sha256', provided_password.encode('utf-8'), salt, 100000)
-    return key == stored_key
+    """Hashea la contraseña usando SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 def register_user(username, password):
     """Registra un nuevo usuario en Supabase usando service role key"""
     try:
-        # Verificar si el usuario ya existe
+        # Verificar si el usuario ya existe usando el cliente de servicio
         response = supabase_service.table('users').select('username').eq('username', username).execute()
         
         if response.data:
@@ -277,7 +242,7 @@ def register_user(username, password):
         hashed_pw = hash_password(password)
         response = supabase_service.table('users').insert({
             'username': username,
-            'password_hash': hashed_pw.hex(),
+            'password_hash': hashed_pw,
             'data': convert_dates_to_iso(get_default_state())
         }).execute()
         
@@ -298,13 +263,11 @@ def login_user(username, password):
             return False, "Usuario no encontrado"
             
         user = response.data[0]
+        hashed_pw = hash_password(password)
         
-        # Verificar contraseña
-        stored_password = bytes.fromhex(user['password_hash'])
-        if verify_password(stored_password, password):
+        if user['password_hash'] == hashed_pw:
             st.session_state.authenticated = True
             st.session_state.username = username
-            st.session_state.user_id = user['id']
             return True, "Inicio de sesión exitoso"
         return False, "Contraseña incorrecta"
     except Exception as e:
@@ -334,9 +297,8 @@ def auth_section():
                     if st.form_submit_button("Iniciar Sesión"):
                         success, message = login_user(username, password)
                         if success:
-                            load_from_supabase()
-                            st.success(message)
-                            st.rerun()
+                            load_from_supabase()  # Carga datos tras login
+                            st.session_state.force_rerun = True
                         else:
                             st.error(message)
             
@@ -344,22 +306,18 @@ def auth_section():
                 with st.form("register_form"):
                     new_user = st.text_input("Nuevo usuario")
                     new_pass = st.text_input("Nueva contraseña", type="password")
-                    confirm_pass = st.text_input("Confirmar contraseña", type="password")
                     
                     if st.form_submit_button("Registrarse"):
                         if len(new_user) < 3:
                             st.error("Usuario muy corto (mín. 3 caracteres)")
                         elif len(new_pass) < 6:
                             st.error("Contraseña muy corta (mín. 6 caracteres)")
-                        elif new_pass != confirm_pass:
-                            st.error("Las contraseñas no coinciden")
                         else:
                             success, message = register_user(new_user, new_pass)
                             if success:
                                 st.session_state.authenticated = True
                                 st.session_state.username = new_user
-                                st.success(message)
-                                st.rerun()
+                                st.session_state.force_rerun = True
                             else:
                                 st.error(message)
 
@@ -376,7 +334,7 @@ def save_to_supabase():
         state = st.session_state.pomodoro_state.copy()
         username = st.session_state.username
         
-        # Usar UPDATE en lugar de UPSERT
+        # Usar UPDATE en lugar de UPSERT para no afectar password_hash
         response = supabase_service.table('users').update({
             'data': convert_dates_to_iso(state),
             'last_updated': datetime.datetime.now().isoformat()
@@ -410,9 +368,10 @@ def load_from_supabase():
         imported_data = convert_iso_to_dates(response.data[0]['data'])
         
         # Actualiza el estado
-        for key, value in imported_data.items():
-            if key in st.session_state.pomodoro_state:
-                st.session_state.pomodoro_state[key] = value
+        state_fields = ['activities', 'tasks', 'projects', 'achievements', 'session_history']
+        for field in state_fields:
+            if field in imported_data:
+                st.session_state.pomodoro_state[field] = imported_data[field]
         
         st.success("Datos cargados correctamente!")
         return True
@@ -1658,7 +1617,7 @@ def main():
             info_tab()
 
     # Control de rerun
-    if st.session_state.get('force_rerun', False):
+    if st.session_state.force_rerun:
         st.session_state.force_rerun = False
         st.rerun()
 
