@@ -133,7 +133,7 @@ def get_default_state():
         'drag_source': None,
         'session_history': [],
         'last_updated': time.time(),
-        'force_rerun': False
+        'force_rerun': False,
         # ... (valores existentes)
         'current_activity': "",
         'current_project': "",
