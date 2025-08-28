@@ -1626,24 +1626,29 @@ def check_alerts():
                 continue
     
     # 2. Verificar si hay sesiones de trabajo completadas recientemente
-    # Verificar que session_history existe y tiene al menos un elemento
-    if state.get('session_history') and len(state['session_history']) > 0:
-        last_session = state['session_history'][-1]
+    # Verificar que session_history existe, es una lista y tiene al menos un elemento
+    session_history = state.get('session_history', [])
+    if isinstance(session_history, list) and len(session_history) > 0:
+        last_session = session_history[-1]
         
-        # Manejar tanto fechas como strings para la fecha de sesión
-        session_date = last_session['Fecha']
-        if isinstance(session_date, str):
-            try:
-                session_date = datetime.datetime.strptime(session_date, "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                # Si no se puede parsear, saltar esta verificación
+        # Verificar que last_session tiene la clave 'Fecha'
+        if 'Fecha' in last_session:
+            # Manejar tanto fechas como strings para la fecha de sesión
+            session_date = last_session['Fecha']
+            if isinstance(session_date, str):
+                try:
+                    session_date = datetime.datetime.strptime(session_date, "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    # Si no se puede parsear, saltar esta verificación
+                    session_date = None
+            elif not isinstance(session_date, (date, datetime.datetime)):
                 session_date = None
-        
-        if session_date and (today - session_date).days == 0:
-            alerts.append(f"✅ Hoy completaste {last_session['Tiempo Activo (min)']} minutos de trabajo")
+            
+            if session_date and (today - session_date).days == 0:
+                tiempo_activo = last_session.get('Tiempo Activo (min)', 0)
+                alerts.append(f"✅ Hoy completaste {tiempo_activo} minutos de trabajo")
     
     return alerts
-
 def sidebar():
     """Muestra la barra lateral con navegación y controles"""
     # Mostrar sección de autenticación
