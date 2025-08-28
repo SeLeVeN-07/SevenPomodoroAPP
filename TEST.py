@@ -463,11 +463,12 @@ def log_session():
     """Registra una sesión completada en el historial"""
     state = st.session_state.pomodoro_state
     if state['total_active_time'] >= 0.1:
-        minutes = round(state['total_active_time'] / 60, 2)
+        # Convertir a horas en lugar de minutos
+        hours = round(state['total_active_time'] / 3600, 2)  # Cambiado de minutos a horas
         log_entry = {
             'Fecha': datetime.datetime.now().strftime("%Y-%m-%d"),
             'Hora Inicio': state['start_time'].strftime("%H:%M:%S") if state['start_time'] else datetime.datetime.now().strftime("%H:%M:%S"),
-            'Tiempo Activo (min)': minutes,
+            'Tiempo Activo (horas)': hours,  # Cambiado de minutos a horas
             'Actividad': state['current_activity'],
             'Proyecto': state['current_project'],
             'Tarea': state.get('current_task', '')
@@ -479,7 +480,7 @@ def log_session():
         # Actualizar logros
         if state['current_phase'] == "Trabajo":
             state['achievements']['pomodoros_completed'] += 1
-            state['achievements']['total_hours'] += minutes / 60
+            state['achievements']['total_hours'] += hours  # Ya está en horas
             
             # Verificar racha diaria
             today = date.today()
@@ -495,7 +496,7 @@ def log_session():
         # Guardar cambios en Supabase
         save_to_supabase()
 
-@st.cache_data(ttl=300)  # Cache por 5 minutos
+@st.cache_data(ttl=300)
 def analyze_data():
     """Analiza los datos del historial de sesiones"""
     data = {
@@ -510,7 +511,13 @@ def analyze_data():
         try:
             date_obj = datetime.datetime.strptime(entry['Fecha'], "%Y-%m-%d").date()
             hour = int(entry['Hora Inicio'].split(':')[0]) if ':' in entry['Hora Inicio'] else 0
-            duration = float(entry['Tiempo Activo (min)'])
+            
+            # Manejar tanto minutos como horas
+            if 'Tiempo Activo (min)' in entry:
+                duration = float(entry['Tiempo Activo (min)']) / 60  # Convertir minutos a horas
+            else:
+                duration = float(entry['Tiempo Activo (horas)'])  # Ya está en horas
+                
             activity = entry['Actividad'].strip()
             project = entry.get('Proyecto', '').strip()
             task = entry.get('Tarea', '').strip()
@@ -529,6 +536,7 @@ def analyze_data():
         except Exception as e:
             print(f"Error procesando entrada: {e}")
     return data
+
 
 def on_close():
     """Función que se ejecuta al cerrar la aplicación"""
@@ -1190,15 +1198,15 @@ def stats_tab():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        total_minutes = sum(data['activities'].values())
-        st.metric("Tiempo Total", f"{total_minutes/60:.1f} horas")
+        total_hours = sum(data['activities'].values())
+        st.metric("Tiempo Total", f"{total_hours:.1f} horas")  # Cambiado a horas
     
     with col2:
         total_sessions = len(data['raw_data'])
         st.metric("Sesiones Totales", total_sessions)
     
     with col3:
-        avg_session = total_minutes / total_sessions if total_sessions > 0 else 0
+        avg_session = total_hours * 60 / total_sessions if total_sessions > 0 else 0  # Convertir a minutos para el promedio
         st.metric("Duración Promedio", f"{avg_session:.1f} min")
     
     with col4:
