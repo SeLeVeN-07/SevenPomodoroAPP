@@ -134,6 +134,10 @@ def get_default_state():
         'session_history': [],
         'last_updated': time.time(),
         'force_rerun': False
+        # ... (valores existentes)
+        'current_activity': "",
+        'current_project': "",
+        'current_task': "","
     }
 
 def format_time(seconds):
@@ -331,12 +335,16 @@ def save_to_supabase():
         return False
     
     try:
-        state = st.session_state.pomodoro_state.copy()
+        # Usar el estado actual directamente, sin copia
+        state = st.session_state.pomodoro_state
         username = st.session_state.username
+        
+        # Convertir el estado actual a formato ISO
+        data_to_save = convert_dates_to_iso(state)
         
         # Usar UPDATE en lugar de UPSERT para no afectar password_hash
         response = supabase_service.table('users').update({
-            'data': convert_dates_to_iso(state),
+            'data': data_to_save,
             'last_updated': datetime.datetime.now().isoformat()
         }).eq('username', username).execute()
         
@@ -484,6 +492,8 @@ def log_session():
                 else:
                     state['achievements']['streak_days'] = 1
                 state['last_session_date'] = today
+                
+    save_to_supabase()
 
 @st.cache_data(ttl=300)  # Cache por 5 minutos
 def analyze_data():
