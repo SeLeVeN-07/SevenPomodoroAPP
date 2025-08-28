@@ -870,7 +870,103 @@ def timer_tab():
     if state['study_mode'] and state['current_activity']:
         st.header(f"Actividad: {state['current_activity']}")
 
+    # Selector de actividad
+    col1, col2 = st.columns(2)
+    with col1:
+        if not state['activities']:
+            st.warning("No hay actividades disponibles. Agrega actividades en la pestaña de Configuración")
+            state['current_activity'] = ""
+        else:
+            state['current_activity'] = st.selectbox(
+                "Actividad",
+                state['activities'],
+                key="current_activity"
+            )
 
+    # Eliminar el campo de subactividad (ya no se usará)
+    with col2:
+        state['sub_activity'] = ""  # Mantener por compatibilidad pero no mostrar
+
+        # Crear proyecto desde el timer tab
+    with st.expander("➕ Crear Proyecto Rápido", expanded=False):
+        new_project_name = st.text_input("Nombre del proyecto", key="new_project_timer")
+        if st.button("Crear Proyecto", key="create_project_timer"):
+            if new_project_name and new_project_name not in [p['name'] for p in state['projects']]:
+                state['projects'].append({
+                    'name': new_project_name,
+                    'activity': state['current_activity']
+                })
+                st.success("Proyecto creado!")
+                st.session_state.force_rerun = True
+            elif new_project_name in [p['name'] for p in state['projects']]:
+                st.error("Ya existe un proyecto con ese nombre")
+
+    # Selector de proyecto (solo proyectos asociados a la actividad actual)
+    available_projects = [p['name'] for p in state['projects'] if p['activity'] == state['current_activity']]
+    if available_projects:
+        state['current_project'] = st.selectbox(
+            "Proyecto",
+            available_projects + ["Ninguno"],
+            key="current_project"
+        )
+    else:
+        st.info("No hay proyectos asociados a esta actividad. Puedes crear uno arriba.")
+        state['current_project'] = "Ninguno"
+
+    # Si hay un proyecto seleccionado, mostrar selector de tareas asociadas
+    if state['current_project'] != "Ninguno":
+        # Obtener tareas no completadas para este proyecto y actividad
+        project_tasks = [t for t in state['tasks'] 
+                       if not t['completed'] 
+                       and t['project'] == state['current_project'] 
+                       and t.get('activity') == state['current_activity']]
+        
+        if project_tasks:
+            # Crear selector de tareas existentes
+            task_names = [t['name'] for t in project_tasks]
+            selected_task = st.selectbox(
+                "Seleccionar tarea existente", 
+                ["-- Seleccionar --"] + task_names + ["+ Crear nueva tarea"],
+                key="select_existing_task"
+            )
+            
+            if selected_task == "+ Crear nueva tarea":
+                # Campo para crear nueva tarea
+                new_task_name = st.text_input("Nombre de la nueva tarea", key="new_task_name")
+                if new_task_name:
+                    # Crear la tarea automáticamente al seleccionarla
+                    new_task = {
+                        'name': new_task_name,
+                        'project': state['current_project'],
+                        'activity': state['current_activity'],
+                        'priority': "Media",
+                        'deadline': date.today() + timedelta(days=7),
+                        'completed': False,
+                        'created': date.today()
+                    }
+                    state['tasks'].append(new_task)
+                    state['current_task'] = new_task_name
+                    st.success("Tarea creada!")
+                    st.session_state.force_rerun = True
+            elif selected_task != "-- Seleccionar --":
+                state['current_task'] = selected_task
+        else:
+            # No hay tareas para este proyecto, permitir crear una
+            new_task_name = st.text_input("Nombre de la tarea", key="new_task_name_no_existing")
+            if new_task_name:
+                new_task = {
+                    'name': new_task_name,
+                    'project': state['current_project'],
+                    'activity': state['current_activity'],
+                    'priority': "Media",
+                    'deadline': date.today() + timedelta(days=7),
+                    'completed': False,
+                    'created': date.today()
+                }
+                state['tasks'].append(new_task)
+                state['current_task'] = new_task_name
+                st.success("Tarea creada!")
+                st.session_state.force_rerun = True
       # Selector de actividad con clave única
     with col1:
         if not state['activities']:
