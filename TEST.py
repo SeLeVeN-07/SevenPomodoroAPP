@@ -137,7 +137,7 @@ def get_default_state():
         # ... (valores existentes)
         'current_activity': "",
         'current_project': "",
-        'current_task': "","
+        'current_task': "",""
     }
 
 def format_time(seconds):
