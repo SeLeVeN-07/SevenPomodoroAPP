@@ -1607,6 +1607,7 @@ def check_alerts():
     for task in state.get('tasks', []):
         if not task.get('completed', False) and task.get('deadline'):
             try:
+                # Manejar tanto fechas como strings
                 if isinstance(task['deadline'], str):
                     deadline = datetime.datetime.strptime(task['deadline'], "%Y-%m-%d").date()
                 else:
@@ -1627,8 +1628,17 @@ def check_alerts():
     # 2. Verificar si hay sesiones de trabajo completadas recientemente
     if state.get('session_history'):
         last_session = state['session_history'][-1]
-        session_date = datetime.datetime.strptime(last_session['Fecha'], "%Y-%m-%d").date()
-        if (today - session_date).days == 0:
+        
+        # Manejar tanto fechas como strings para la fecha de sesión
+        session_date = last_session['Fecha']
+        if isinstance(session_date, str):
+            try:
+                session_date = datetime.datetime.strptime(session_date, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                # Si no se puede parsear, saltar esta verificación
+                session_date = None
+        
+        if session_date and (today - session_date).days == 0:
             alerts.append(f"✅ Hoy completaste {last_session['Tiempo Activo (min)']} minutos de trabajo")
     
     return alerts
