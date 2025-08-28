@@ -1110,8 +1110,8 @@ def timer_tab():
     chart_placeholder = st.empty()
     chart_placeholder.plotly_chart(fig, use_container_width=True)
 
-    # Controles del temporizador
-    col1, col2, col3 = st.columns(3)
+    # Controles del temporizador - ahora con 4 columnas para incluir el botón de reinicio
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         if st.button("▶️ Iniciar" if not state['timer_running'] else "▶️ Reanudar",
@@ -1174,7 +1174,30 @@ def timer_tab():
             save_to_supabase()  # Guardar estado
             st.session_state.force_rerun = True
 
-        # Contador de sesiones
+    with col4:
+        if st.button("🔄 Reiniciar", use_container_width=True, key="reset_timer"):
+            # Función de reinicio del temporizador
+            # Si el temporizador está en ejecución y es fase de trabajo, guardar el tiempo transcurrido
+            if state['timer_running'] and state['current_phase'] == "Trabajo" and state['total_active_time'] >= 0.1:
+                log_session()  # Guarda la sesión incompleta
+            
+            # Si el temporizador está en pausa, no guardar duplicados
+            state['timer_running'] = False
+            state['timer_paused'] = False
+            state['session_count'] = 0
+            state['current_phase'] = "Trabajo"
+            state['remaining_time'] = state['work_duration']
+            state['total_active_time'] = 0
+            state['start_time'] = None
+            state['paused_time'] = None
+            st.session_state.timer_start = None
+            st.session_state.last_update = None
+            st.session_state.paused_time = None
+            st.success("Temporizador reiniciado")
+            save_to_supabase()  # Guardar estado
+            st.session_state.force_rerun = True
+
+    # Contador de sesiones
     st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
 
     # Actualizar el temporizador si está en ejecución
@@ -1249,9 +1272,8 @@ def timer_tab():
                 chart_placeholder.plotly_chart(fig, use_container_width=True)
 
     # Forzar actualización de la interfaz si es necesario
-    if st.session_state.force_rerun:
-        st.session_state.force_rerun = False
-        st.rerun()
+    time.sleep(0.1)
+    st.rerun()
 # ==============================================
 # Pestaña de Estadísticas (Mejorada)
 # ==============================================
