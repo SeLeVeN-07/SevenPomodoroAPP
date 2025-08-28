@@ -509,34 +509,50 @@ def analyze_data():
     
     for entry in st.session_state.pomodoro_state['session_history']:
         try:
+            # Parsear fecha
             date_obj = datetime.datetime.strptime(entry['Fecha'], "%Y-%m-%d").date()
-            hour = int(entry['Hora Inicio'].split(':')[0]) if ':' in entry['Hora Inicio'] else 0
             
-            # Manejar tanto minutos como horas
+            # Parsear hora de inicio
+            hora_inicio = entry.get('Hora Inicio', '00:00:00')
+            if ':' in hora_inicio:
+                hour = int(hora_inicio.split(':')[0])
+            else:
+                hour = 0
+            
+            # Obtener duración (manejar diferentes formatos)
             if 'Tiempo Activo (min)' in entry:
                 duration = float(entry['Tiempo Activo (min)']) / 60  # Convertir minutos a horas
+            elif 'Tiempo Activo (horas)' in entry:
+                duration = float(entry['Tiempo Activo (horas)'])
             else:
-                duration = float(entry['Tiempo Activo (horas)'])  # Ya está en horas
+                duration = 0
                 
-            activity = entry['Actividad'].strip()
+            activity = entry.get('Actividad', '').strip()
             project = entry.get('Proyecto', '').strip()
             task = entry.get('Tarea', '').strip()
 
+            # Acumular datos
             data['activities'][activity] += duration
             if project:
                 data['projects'][project] += duration
             if task:
                 data['tasks'][task] += duration
             data['daily_total'][entry['Fecha']] += duration
+            
+            # Guardar datos crudos
             data['raw_data'].append({
-                'date': date_obj, 'hour': hour, 
-                'duration': duration, 'activity': activity,
-                'project': project, 'task': task
+                'date': date_obj, 
+                'hour': hour, 
+                'duration': duration, 
+                'activity': activity,
+                'project': project, 
+                'task': task
             })
         except Exception as e:
             print(f"Error procesando entrada: {e}")
+            print(f"Entrada problemática: {entry}")
+    
     return data
-
 
 def on_close():
     """Función que se ejecuta al cerrar la aplicación"""
@@ -1199,14 +1215,14 @@ def stats_tab():
     
     with col1:
         total_hours = sum(data['activities'].values())
-        st.metric("Tiempo Total", f"{total_hours:.1f} horas")  # Cambiado a horas
+        st.metric("Tiempo Total", f"{total_hours:.2f} horas")
     
     with col2:
         total_sessions = len(data['raw_data'])
         st.metric("Sesiones Totales", total_sessions)
     
     with col3:
-        avg_session = total_hours * 60 / total_sessions if total_sessions > 0 else 0  # Convertir a minutos para el promedio
+        avg_session = total_hours * 60 / total_sessions if total_sessions > 0 else 0
         st.metric("Duración Promedio", f"{avg_session:.1f} min")
     
     with col4:
@@ -1222,27 +1238,30 @@ def stats_tab():
         with col1:
             # Gráfico de distribución de actividades
             if data['activities']:
-                fig = px.pie(
-                    values=list(data['activities'].values()), 
-                    names=list(data['activities'].keys()),
-                    title="Distribución de Actividades"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                # Filtrar actividades con tiempo significativo
+                filtered_activities = {k: v for k, v in data['activities'].items() if v > 0.1}
+                
+                if filtered_activities:
+                    fig = px.pie(
+                        values=list(filtered_activities.values()), 
+                        names=list(filtered_activities.keys()),
+                        title="Distribución de Actividades (horas)"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No hay datos significativos para mostrar")
             else:
                 st.info("No hay datos para mostrar")
         
         with col2:
             # Gráfico de tiempo por proyecto
-            project_data = defaultdict(float)
-            for r in data['raw_data']:
-                if r['project']:
-                    project_data[r['project']] += r['duration']
+            project_data = {k: v for k, v in data['projects'].items() if v > 0.1}
             
             if project_data:
                 fig = px.pie(
                     values=list(project_data.values()), 
                     names=list(project_data.keys()),
-                    title="Distribución por Proyecto"
+                    title="Distribución por Proyecto (horas)"
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -1255,15 +1274,15 @@ def stats_tab():
         if data['raw_data']:
             # Agrupar por fecha
             df_dates = pd.DataFrame([
-                {'date': r['date'], 'minutes': r['duration']} 
+                {'date': r['date'], 'hours': r['duration']} 
                 for r in data['raw_data']
             ])
             daily_totals = df_dates.groupby('date').sum().reset_index()
             
             fig = px.line(
-                daily_totals, x='date', y='minutes',
+                daily_totals, x='date', y='hours',
                 title="Evolución del Tiempo por Día",
-                labels={'date': 'Fecha', 'minutes': 'Minutos'}
+                labels={'date': 'Fecha', 'hours': 'Horas'}
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -1274,27 +1293,34 @@ def stats_tab():
         
         if data['raw_data']:
             # Crear matriz para heatmap
-            activities = sorted(set(r['activity'] for r in data['raw_data']))
+            activities = sorted(set(r['activity'] for r in data['raw_data'] if r['activity']))
             projects = sorted(set(r['project'] for r in data['raw_data'] if r['project']))
             
-            # Crear matriz de minutos por actividad y proyecto
+            # Crear matriz de horas por actividad y proyecto
             heatmap_data = np.zeros((len(activities), len(projects)))
             
             for r in data['raw_data']:
-                if r['project']:
-                    act_idx = activities.index(r['activity'])
-                    proj_idx = projects.index(r['project'])
-                    heatmap_data[act_idx, proj_idx] += r['duration']
+                if r['project'] and r['activity']:
+                    try:
+                        act_idx = activities.index(r['activity'])
+                        proj_idx = projects.index(r['project'])
+                        heatmap_data[act_idx, proj_idx] += r['duration']
+                    except (ValueError, IndexError):
+                        # Ignorar entradas que no estén en las listas
+                        pass
             
-            # Crear heatmap
-            fig = px.imshow(
-                heatmap_data,
-                labels=dict(x="Proyecto", y="Actividad", color="Minutos"),
-                x=projects,
-                y=activities,
-                title="Distribución de Tiempo por Actividad y Proyecto"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Crear heatmap solo si hay datos
+            if np.sum(heatmap_data) > 0:
+                fig = px.imshow(
+                    heatmap_data,
+                    labels=dict(x="Proyecto", y="Actividad", color="Horas"),
+                    x=projects,
+                    y=activities,
+                    title="Distribución de Tiempo por Actividad y Proyecto"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No hay datos suficientes para el heatmap")
         else:
             st.info("No hay datos suficientes para el heatmap")
     
@@ -1306,13 +1332,23 @@ def stats_tab():
             df_display = pd.DataFrame([{
                 'Fecha': r['date'].strftime("%Y-%m-%d"),
                 'Hora': f"{r['hour']:02d}:00",
-                'Duración (min)': r['duration'],
+                'Duración (horas)': round(r['duration'], 2),
                 'Actividad': r['activity'],
                 'Proyecto': r['project'],
                 'Tarea': r['task']
             } for r in data['raw_data']])
             
             st.dataframe(df_display, use_container_width=True)
+            
+            # Botón para exportar datos
+            if st.button("Exportar datos a CSV"):
+                csv = df_display.to_csv(index=False)
+                st.download_button(
+                    label="Descargar CSV",
+                    data=csv,
+                    file_name="sesiones_pomodoro.csv",
+                    mime="text/csv"
+                )
         else:
             st.info("No hay sesiones registradas")
 
