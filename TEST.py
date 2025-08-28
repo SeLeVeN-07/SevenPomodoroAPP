@@ -870,20 +870,6 @@ def timer_tab():
     if state['study_mode'] and state['current_activity']:
         st.header(f"Actividad: {state['current_activity']}")
 
-    
-        # Crear proyecto desde el timer tab
-    with st.expander("➕ Crear Proyecto Rápido", expanded=False):
-        new_project_name = st.text_input("Nombre del proyecto", key="new_project_timer")
-        if st.button("Crear Proyecto", key="create_project_timer"):
-            if new_project_name and new_project_name not in [p['name'] for p in state['projects']]:
-                state['projects'].append({
-                    'name': new_project_name,
-                    'activity': state['current_activity']
-                })
-                st.success("Proyecto creado!")
-                st.session_state.force_rerun = True
-            elif new_project_name in [p['name'] for p in state['projects']]:
-                st.error("Ya existe un proyecto con ese nombre")
 
       # Selector de actividad con clave única
     with col1:
