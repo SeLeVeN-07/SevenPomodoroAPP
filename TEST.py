@@ -1106,7 +1106,9 @@ def timer_tab():
         font={'color': theme['text']}
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    # Usar un contenedor para el gráfico que no force rerenderizados completos
+    chart_placeholder = st.empty()
+    chart_placeholder.plotly_chart(fig, use_container_width=True)
 
     # Controles del temporizador
     col1, col2, col3 = st.columns(3)
@@ -1220,11 +1222,36 @@ def timer_tab():
                 
                 save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
+            else:
+                # Solo actualizar el gráfico sin forzar un rerun completo
+                fig = go.Figure(go.Indicator(
+                    mode = "gauge+number",
+                    value = state['remaining_time'],
+                    number = {'suffix': "s", 'font': {'size': 40}},
+                    gauge = {
+                        'axis': {'range': [0, phase_duration], 'visible': False},
+                        'bar': {'color': get_phase_color(state['current_phase'])},
+                        'steps': [
+                            {'range': [0, phase_duration], 'color': theme['circle_bg']}
+                        ]
+                    },
+                    domain = {'x': [0, 1], 'y': [0, 1]},
+                    title = {'text': f"{state['current_phase']} - {format_time(state['remaining_time'])}", 'font': {'size': 24}}
+                ))
+
+                fig.update_layout(
+                    height=300,
+                    margin=dict(l=10, r=10, t=80, b=10),
+                    paper_bgcolor=theme['bg'],
+                    font={'color': theme['text']}
+                )
+                
+                chart_placeholder.plotly_chart(fig, use_container_width=True)
 
     # Forzar actualización de la interfaz si es necesario
-    time.sleep(0.1)
-    st.rerun()
-
+    if st.session_state.force_rerun:
+        st.session_state.force_rerun = False
+        st.rerun()
 # ==============================================
 # Pestaña de Estadísticas (Mejorada)
 # ==============================================
