@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
-Versión Mejorada con correcciones de timer
+Versión Mejorada con selección persistente
 """
 import streamlit as st
 import pandas as pd
@@ -134,8 +134,13 @@ def get_default_state():
         'drag_source': None,
         'session_history': [],
         'last_updated': time.time(),
-        'force_rerun': False
+        'force_rerun': False,
+        # Nuevos campos para los filtros
+        'filter_activity': "Todas",
+        'filter_project': "Todos",
+        'task_status_filter': "Todas"
     }
+
 def format_time(seconds):
     """Formatea segundos a formato MM:SS"""
     mins = int(seconds // 60)
@@ -371,11 +376,9 @@ def load_from_supabase():
             
         imported_data = convert_iso_to_dates(response.data[0]['data'])
         
-        # Actualiza el estado
-        state_fields = ['activities', 'tasks', 'projects', 'achievements', 'session_history']
-        for field in state_fields:
-            if field in imported_data:
-                st.session_state.pomodoro_state[field] = imported_data[field]
+        # Actualiza el estado completo
+        for key, value in imported_data.items():
+            st.session_state.pomodoro_state[key] = value
         
         st.success("Datos cargados correctamente!")
         return True
@@ -1330,28 +1333,54 @@ def tasks_tab():
     # Filtros
     col1, col2, col3 = st.columns(3)
     with col1:
+        # Inicializar filtro de actividad si no existe
+        if 'filter_activity' not in state:
+            state['filter_activity'] = "Todas"
+            
         filter_activity = st.selectbox(
             "Filtrar por actividad",
             ["Todas"] + state['activities'],
-            key="filter_activity"
+            index=0 if state['filter_activity'] == "Todas" else (state['activities'].index(state['filter_activity']) + 1 if state['filter_activity'] in state['activities'] else 0),
+            key="filter_activity_selector"
         )
+        state['filter_activity'] = filter_activity
+        
     with col2:
+        # Inicializar filtro de proyecto si no existe
+        if 'filter_project' not in state:
+            state['filter_project'] = "Todos"
+            
         available_projects = ["Todos"] + [p['name'] for p in state['projects']]
         if filter_activity != "Todas":
             available_projects = ["Todos"] + [p['name'] for p in state['projects'] if p['activity'] == filter_activity]
         
+        # Encontrar el índice del proyecto actual en el filtro
+        try:
+            project_index = available_projects.index(state['filter_project'])
+        except ValueError:
+            project_index = 0
+            
         filter_project = st.selectbox(
             "Filtrar por proyecto",
             available_projects,
-            key="filter_project"
+            index=project_index,
+            key="filter_project_selector"
         )
+        state['filter_project'] = filter_project
+        
     with col3:
+        # Inicializar filtro de estado si no existe
+        if 'task_status_filter' not in state:
+            state['task_status_filter'] = "Todas"
+            
         task_status = st.radio(
             "Estado",
             ["Todas", "Pendientes", "Completadas"],
+            index=["Todas", "Pendientes", "Completadas"].index(state['task_status_filter']),
             horizontal=True,
-            key="task_status"
+            key="task_status_selector"
         )
+        state['task_status_filter'] = task_status
     
     # Aplicar filtros y mostrar tareas
     display_filtered_tasks(filter_activity, filter_project, task_status)
@@ -1365,7 +1394,7 @@ def show_achievements():
     state = st.session_state.pomodoro_state
     achievements = state['achievements']
     
-    st.subheader("🏆 Logros y Estadísticas")
+    st.subheader("🏆 Logros and Estadísticas")
     
     col1, col2, col3, col4 = st.columns(4)
     
