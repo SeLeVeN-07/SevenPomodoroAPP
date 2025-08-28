@@ -513,14 +513,24 @@ def analyze_data():
             # Depuración: mostrar información de la entrada
             print(f"Procesando entrada {i}: {entry}")
             
-            # Parsear fecha
-            date_obj = datetime.datetime.strptime(entry['Fecha'], "%Y-%m-%d").date()
+            # Parsear fecha (manejar tanto strings como objetos date)
+            fecha = entry['Fecha']
+            if isinstance(fecha, str):
+                date_obj = datetime.datetime.strptime(fecha, "%Y-%m-%d").date()
+                print(f"  Fecha como string: {fecha} -> {date_obj}")
+            elif isinstance(fecha, (datetime.date, datetime.datetime)):
+                date_obj = fecha if isinstance(fecha, datetime.date) else fecha.date()
+                print(f"  Fecha como objeto: {fecha} -> {date_obj}")
+            else:
+                raise ValueError(f"Tipo de fecha no reconocido: {type(fecha)}")
             
             # Parsear hora de inicio
             hora_inicio = entry.get('Hora Inicio', '00:00:00')
-            if ':' in hora_inicio:
+            if isinstance(hora_inicio, str) and ':' in hora_inicio:
                 hour_parts = hora_inicio.split(':')
                 hour = int(hour_parts[0])
+            elif isinstance(hora_inicio, datetime.time):
+                hour = hora_inicio.hour
             else:
                 hour = 0
             
@@ -572,6 +582,7 @@ def analyze_data():
     print(f"Tiempo total en actividades: {sum(data['activities'].values())} horas")
     
     return data
+    
 def on_close():
     """Función que se ejecuta al cerrar la aplicación"""
     if check_authentication():
@@ -1258,9 +1269,16 @@ def stats_tab():
         st.metric("Duración Promedio", f"{avg_session:.1f} min")
     
     with col4:
-        unique_days = len(data['daily_total'])
+        # Para daily_total, necesitamos manejar tanto strings como objetos date
+        unique_dates = set()
+        for date_key in data['daily_total'].keys():
+            if isinstance(date_key, str):
+                unique_dates.add(date_key)
+            elif isinstance(date_key, (datetime.date, datetime.datetime)):
+                unique_dates.add(date_key.strftime("%Y-%m-%d"))
+        unique_days = len(unique_dates)
         st.metric("Días Activos", unique_days)
-    
+        
     # Selector de pestañas
     tab1, tab2, tab3, tab4 = st.tabs(["Visión General", "Tendencias", "Distribución", "Tabla Resumen"])
     
