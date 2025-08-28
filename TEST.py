@@ -504,32 +504,42 @@ def analyze_data():
         'projects': defaultdict(float),
         'tasks': defaultdict(float),
         'daily_total': defaultdict(float),
-        'raw_data': []
+        'raw_data': [],
+        'errors': []  # Para rastrear errores en el procesamiento
     }
     
-    for entry in st.session_state.pomodoro_state['session_history']:
+    for i, entry in enumerate(st.session_state.pomodoro_state['session_history']):
         try:
+            # Depuración: mostrar información de la entrada
+            print(f"Procesando entrada {i}: {entry}")
+            
             # Parsear fecha
             date_obj = datetime.datetime.strptime(entry['Fecha'], "%Y-%m-%d").date()
             
             # Parsear hora de inicio
             hora_inicio = entry.get('Hora Inicio', '00:00:00')
             if ':' in hora_inicio:
-                hour = int(hora_inicio.split(':')[0])
+                hour_parts = hora_inicio.split(':')
+                hour = int(hour_parts[0])
             else:
                 hour = 0
             
             # Obtener duración (manejar diferentes formatos)
+            duration = 0
             if 'Tiempo Activo (min)' in entry:
                 duration = float(entry['Tiempo Activo (min)']) / 60  # Convertir minutos a horas
+                print(f"  Duración en minutos: {entry['Tiempo Activo (min)']} -> {duration} horas")
             elif 'Tiempo Activo (horas)' in entry:
                 duration = float(entry['Tiempo Activo (horas)'])
+                print(f"  Duración en horas: {duration}")
             else:
-                duration = 0
+                print(f"  No se encontró campo de duración en la entrada {i}")
                 
             activity = entry.get('Actividad', '').strip()
             project = entry.get('Proyecto', '').strip()
             task = entry.get('Tarea', '').strip()
+
+            print(f"  Actividad: {activity}, Proyecto: {project}, Tarea: {task}")
 
             # Acumular datos
             data['activities'][activity] += duration
@@ -548,12 +558,20 @@ def analyze_data():
                 'project': project, 
                 'task': task
             })
+            
+            print(f"  Entrada {i} procesada correctamente")
+            
         except Exception as e:
-            print(f"Error procesando entrada: {e}")
-            print(f"Entrada problemática: {entry}")
+            error_msg = f"Error procesando entrada {i}: {e}"
+            print(error_msg)
+            data['errors'].append(error_msg)
+    
+    # Depuración: mostrar resumen
+    print(f"Total de entradas procesadas: {len(data['raw_data'])}")
+    print(f"Total de errores: {len(data['errors'])}")
+    print(f"Tiempo total en actividades: {sum(data['activities'].values())} horas")
     
     return data
-
 def on_close():
     """Función que se ejecuta al cerrar la aplicación"""
     if check_authentication():
@@ -1209,6 +1227,20 @@ def stats_tab():
         return
     
     data = analyze_data()
+    
+    # Mostrar información de depuración
+    if data['errors']:
+        with st.expander("⚠️ Errores de procesamiento (click para ver)"):
+            for error in data['errors']:
+                st.error(error)
+    
+    # Mostrar resumen de depuración
+    with st.expander("🔍 Información de depuración"):
+        st.write(f"Total de entradas en historial: {len(st.session_state.pomodoro_state['session_history'])}")
+        st.write(f"Total de entradas procesadas: {len(data['raw_data'])}")
+        st.write(f"Total de errores: {len(data['errors'])}")
+        st.write("Historial completo:")
+        st.write(st.session_state.pomodoro_state['session_history'])
     
     # Mostrar métricas principales
     col1, col2, col3, col4 = st.columns(4)
