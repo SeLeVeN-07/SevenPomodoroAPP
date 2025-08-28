@@ -967,50 +967,6 @@ def timer_tab():
                 state['current_task'] = new_task_name
                 st.success("Tarea creada!")
                 st.session_state.force_rerun = True
-      # Selector de actividad con clave única
-    with col1:
-        if not state['activities']:
-            st.warning("No hay actividades disponibles. Agrega actividades en la pestaña de Configuración")
-            state['current_activity'] = ""
-        else:
-            state['current_activity'] = st.selectbox(
-                "Actividad",
-                state['activities'],
-                index=state['activities'].index(state['current_activity']) if state['current_activity'] in state['activities'] else 0,
-                key="timer_activity_selector"
-            )
-
-    # Selector de proyecto con clave única
-    available_projects = [p['name'] for p in state['projects'] if p['activity'] == state['current_activity']]
-    if available_projects:
-        current_project_index = available_projects.index(state['current_project']) if state['current_project'] in available_projects else 0
-        state['current_project'] = st.selectbox(
-            "Proyecto",
-            available_projects + ["Ninguno"],
-            index=current_project_index,
-            key="timer_project_selector"
-        )
-    else:
-        st.info("No hay proyectos asociados a esta actividad. Puedes crear uno arriba.")
-        state['current_project'] = "Ninguno"
-    
-    # Selector de tarea con clave única
-    if state['current_project'] != "Ninguno":
-        project_tasks = [t for t in state['tasks'] 
-                       if not t['completed'] 
-                       and t['project'] == state['current_project'] 
-                       and t.get('activity') == state['current_activity']]
-        
-        if project_tasks:
-            task_names = [t['name'] for t in project_tasks]
-            current_task_index = task_names.index(state['current_task']) if 'current_task' in state and state['current_task'] in task_names else 0
-            
-            selected_task = st.selectbox(
-                "Seleccionar tarea existente", 
-                ["-- Seleccionar --"] + task_names + ["+ Crear nueva tarea"],
-                index=current_task_index + 1 if 'current_task' in state and state['current_task'] in task_names else 0,
-                key="timer_task_selector"
-            )
 
     # Verificar si hay una actividad seleccionada antes de mostrar el temporizador
     if not state['current_activity']:
