@@ -1597,58 +1597,6 @@ def info_tab():
 # Barra lateral (Mejorada)
 # ==============================================
 
-def check_alerts():
-    """Verifica y muestra alertas importantes en la barra lateral"""
-    state = st.session_state.pomodoro_state
-    alerts = []
-    today = date.today()
-    
-    # 1. Verificar tareas próximas a vencer (hoy o próximos 3 días)
-    for task in state.get('tasks', []):
-        if not task.get('completed', False) and task.get('deadline'):
-            try:
-                # Manejar tanto fechas como strings
-                if isinstance(task['deadline'], str):
-                    deadline = datetime.datetime.strptime(task['deadline'], "%Y-%m-%d").date()
-                else:
-                    deadline = task['deadline']
-                    
-                days_remaining = (deadline - today).days
-                
-                if days_remaining == 0:
-                    alerts.append(f"⏰ Hoy: {task.get('name', 'Tarea sin nombre')}")
-                elif 0 < days_remaining <= 3:
-                    alerts.append(f"⚠️ En {days_remaining}d: {task.get('name', 'Tarea sin nombre')}")
-                elif days_remaining < 0:
-                    alerts.append(f"❌ Vencida hace {-days_remaining}d: {task.get('name', 'Tarea sin nombre')}")
-            except (ValueError, TypeError):
-                # Manejar formatos de fecha inválidos
-                continue
-    
-    # 2. Verificar si hay sesiones de trabajo completadas recientemente
-    # Verificar que session_history existe, es una lista y tiene al menos un elemento
-    session_history = state.get('session_history', [])
-    if isinstance(session_history, list) and len(session_history) > 0:
-        last_session = session_history[-1]
-        
-        # Verificar que last_session tiene la clave 'Fecha'
-        if 'Fecha' in last_session:
-            # Manejar tanto fechas como strings para la fecha de sesión
-            session_date = last_session['Fecha']
-            if isinstance(session_date, str):
-                try:
-                    session_date = datetime.datetime.strptime(session_date, "%Y-%m-%d").date()
-                except (ValueError, TypeError):
-                    # Si no se puede parsear, saltar esta verificación
-                    session_date = None
-            elif not isinstance(session_date, (date, datetime.datetime)):
-                session_date = None
-            
-            if session_date and (today - session_date).days == 0:
-                tiempo_activo = last_session.get('Tiempo Activo (min)', 0)
-                alerts.append(f"✅ Hoy completaste {tiempo_activo} minutos de trabajo")
-    
-    return alerts
 def sidebar():
     """Muestra la barra lateral con navegación y controles"""
     # Mostrar sección de autenticación
@@ -1662,15 +1610,6 @@ def sidebar():
     with st.sidebar:
         st.title("Pomodoro Pro 🍅")
         
-        # Mostrar alertas
-        alerts = check_alerts()
-        if alerts:
-            st.subheader("🔔 Alertas")
-            for alert in alerts:
-                st.warning(alert, icon="⚠️")
-        else:
-            st.subheader("🔔 Alertas")
-            st.info("No hay alertas en este momento")
         
         # Navegación por pestañas
         st.subheader("Navegación")
