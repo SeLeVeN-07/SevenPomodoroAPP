@@ -115,6 +115,7 @@ def get_default_state():
         'tasks': [],
         'projects': [],
         'current_project': "",
+        'current_task': "",  # Nueva variable para guardar la tarea seleccionada
         'deadlines': [],
         'study_mode': False,
         'study_goals': [],
@@ -133,13 +134,8 @@ def get_default_state():
         'drag_source': None,
         'session_history': [],
         'last_updated': time.time(),
-        'force_rerun': False,
-        # ... (valores existentes)
-        'current_activity': "",
-        'current_project': "",
-        'current_task': "",
+        'force_rerun': False
     }
-
 def format_time(seconds):
     """Formatea segundos a formato MM:SS"""
     mins = int(seconds // 60)
@@ -492,8 +488,9 @@ def log_session():
                 else:
                     state['achievements']['streak_days'] = 1
                 state['last_session_date'] = today
-                
-    save_to_supabase()
+        
+        # Guardar cambios en Supabase
+        save_to_supabase()
 
 @st.cache_data(ttl=300)  # Cache por 5 minutos
 def analyze_data():
@@ -560,6 +557,25 @@ def logout():
 # ==============================================
 # Funciones de gestión de tareas (Mejoradas)
 # ==============================================
+
+def complete_task(task):
+    """Marca una tarea como completada y guarda en Supabase"""
+    state = st.session_state.pomodoro_state
+    
+    # Encontrar la tarea en la lista de tareas pendientes
+    for t in state['tasks']:
+        if t['name'] == task['name'] and t['project'] == task['project']:
+            t['completed'] = True
+            t['completed_date'] = date.today()
+            state['tasks'].remove(t)
+            state['completed_tasks'].append(t)
+            state['achievements']['tasks_completed'] += 1
+            break
+    
+    # Guardar cambios
+    save_to_supabase()
+    st.success("Tarea completada!")
+    st.session_state.force_rerun = True
 
 def edit_task_modal():
     """Muestra el modal para editar una tarea"""
@@ -870,17 +886,22 @@ def timer_tab():
     if state['study_mode'] and state['current_activity']:
         st.header(f"Actividad: {state['current_activity']}")
 
-    # Selector de actividad
+    # Selector de actividad con clave única
     col1, col2 = st.columns(2)
     with col1:
         if not state['activities']:
             st.warning("No hay actividades disponibles. Agrega actividades en la pestaña de Configuración")
             state['current_activity'] = ""
         else:
+            # Asegurar que current_activity esté en la lista de actividades
+            if state['current_activity'] not in state['activities']:
+                state['current_activity'] = state['activities'][0] if state['activities'] else ""
+
             state['current_activity'] = st.selectbox(
                 "Actividad",
                 state['activities'],
-                key="current_activity"
+                index=state['activities'].index(state['current_activity']) if state['current_activity'] in state['activities'] else 0,
+                key="timer_activity_selector"
             )
 
     # Eliminar el campo de subactividad (ya no se usará)
@@ -897,17 +918,30 @@ def timer_tab():
                     'activity': state['current_activity']
                 })
                 st.success("Proyecto creado!")
+                save_to_supabase()  # Guardar después de crear proyecto
                 st.session_state.force_rerun = True
             elif new_project_name in [p['name'] for p in state['projects']]:
                 st.error("Ya existe un proyecto con ese nombre")
 
-    # Selector de proyecto (solo proyectos asociados a la actividad actual)
+    # Selector de proyecto (solo proyectos asociados a la actividad actual) con clave única
     available_projects = [p['name'] for p in state['projects'] if p['activity'] == state['current_activity']]
     if available_projects:
+        # Si el proyecto actual no está en la lista de disponibles, resetear a "Ninguno" o al primero
+        if state['current_project'] not in available_projects:
+            state['current_project'] = "Ninguno"
+
+        # Encontrar el índice del proyecto actual en la lista de opciones (available_projects + ["Ninguno"])
+        options = available_projects + ["Ninguno"]
+        try:
+            index = options.index(state['current_project'])
+        except ValueError:
+            index = 0
+
         state['current_project'] = st.selectbox(
             "Proyecto",
-            available_projects + ["Ninguno"],
-            key="current_project"
+            options,
+            index=index,
+            key="timer_project_selector"
         )
     else:
         st.info("No hay proyectos asociados a esta actividad. Puedes crear uno arriba.")
@@ -924,10 +958,22 @@ def timer_tab():
         if project_tasks:
             # Crear selector de tareas existentes
             task_names = [t['name'] for t in project_tasks]
+            # Asegurar que la tarea actual esté en la lista
+            if 'current_task' not in state or state['current_task'] not in task_names:
+                state['current_task'] = task_names[0] if task_names else ""
+
+            options = ["-- Seleccionar --"] + task_names + ["+ Crear nueva tarea"]
+            # Encontrar el índice de la tarea actual
+            try:
+                index = task_names.index(state['current_task']) + 1
+            except ValueError:
+                index = 0
+
             selected_task = st.selectbox(
                 "Seleccionar tarea existente", 
-                ["-- Seleccionar --"] + task_names + ["+ Crear nueva tarea"],
-                key="select_existing_task"
+                options,
+                index=index,
+                key="timer_task_selector"
             )
             
             if selected_task == "+ Crear nueva tarea":
@@ -947,6 +993,7 @@ def timer_tab():
                     state['tasks'].append(new_task)
                     state['current_task'] = new_task_name
                     st.success("Tarea creada!")
+                    save_to_supabase()  # Guardar después de crear tarea
                     st.session_state.force_rerun = True
             elif selected_task != "-- Seleccionar --":
                 state['current_task'] = selected_task
@@ -966,6 +1013,7 @@ def timer_tab():
                 state['tasks'].append(new_task)
                 state['current_task'] = new_task_name
                 st.success("Tarea creada!")
+                save_to_supabase()  # Guardar después de crear tarea
                 st.session_state.force_rerun = True
 
     # Verificar si hay una actividad seleccionada antes de mostrar el temporizador
@@ -1047,7 +1095,7 @@ def timer_tab():
             if was_work:
                 state['session_count'] += 1
                 if state['total_active_time'] >= 0.1:
-                    log_session()
+                    log_session()  # Esta función ahora guarda automáticamente
                 
                 if state['session_count'] >= state['total_sessions']:
                     st.success("¡Todas las sesiones completadas!")
@@ -1089,7 +1137,7 @@ def timer_tab():
                 
                 if was_work:
                     if state['total_active_time'] >= 0.1:
-                        log_session()
+                        log_session()  # Esta función ahora guarda automáticamente
                     state['session_count'] += 1
                     
                     if state['session_count'] >= state['total_sessions']:
