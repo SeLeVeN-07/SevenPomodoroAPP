@@ -46,16 +46,6 @@ supabase_service = init_supabase_service()
 # Configuración inicial y constantes
 # ==============================================
 
-st.markdown(
-    """
-    <style>
-    .main {
-        background-color: transparent;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
 # Configuración de la página
 st.set_page_config(
     page_title="Pomodoro Pro",
@@ -66,12 +56,6 @@ st.set_page_config(
 
 # Constantes
 THEMES = {
-    
-    'Transparente': {
-        'bg': 'rgba(0,0,0,0)',
-        'fg': '#000000',
-        'circle_bg': 'rgba(0,0,0,0)',
-     },  
     'Claro': {
         'bg': '#ffffff', 'fg': '#000000', 'circle_bg': '#e0e0e0',
         'text': '#333333', 'button_bg': '#f0f0f0', 'button_fg': '#000000',
