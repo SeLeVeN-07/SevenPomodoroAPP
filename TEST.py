@@ -56,6 +56,12 @@ st.set_page_config(
 
 # Constantes
 THEMES = {
+    
+    'Transparente': {
+        'bg': 'rgba(0,0,0,0)',
+        'fg': '#000000',
+        'circle_bg': 'rgba(0,0,0,0)',
+        
     'Claro': {
         'bg': '#ffffff', 'fg': '#000000', 'circle_bg': '#e0e0e0',
         'text': '#333333', 'button_bg': '#f0f0f0', 'button_fg': '#000000',
