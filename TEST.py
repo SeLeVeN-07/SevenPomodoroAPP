@@ -46,6 +46,16 @@ supabase_service = init_supabase_service()
 # Configuración inicial y constantes
 # ==============================================
 
+st.markdown(
+    """
+    <style>
+    .main {
+        background-color: transparent;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 # Configuración de la página
 st.set_page_config(
     page_title="Pomodoro Pro",
