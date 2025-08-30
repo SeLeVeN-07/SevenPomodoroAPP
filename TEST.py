@@ -1,8 +1,7 @@
-
 # -*- coding: utf-8 -*-
 """
 Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
-Versión Mejorada con selección persistente
+Versión Mejorada con Dashboard estilo Tkinter Designer
 """
 import streamlit as st
 import pandas as pd
@@ -65,11 +64,20 @@ THEMES = {
         'chart2': '#e74c3c', 'grid': '#eeeeee'
     },
     'Oscuro': {
-        'bg': '#2d2d2d', 'fg': '#ffffff', 'circle_bg': '#404040',
-        'text': '#e0e0e0', 'button_bg': '#505050', 'button_fg': '#ffffff',
-        'frame_bg': '#3d3d3d', 'canvas_bg': '#3d3d3d', 'progress': '#2980b9',
-        'border': '#606060', 'highlight': '#707070', 'chart1': '#2980b9',
-        'chart2': '#c0392b', 'grid': '#404040'
+        'bg': '#2A2F4F',  # Cambiado para coincidir con el diseño
+        'fg': '#FFFFFF', 
+        'circle_bg': '#917FB3',  # Color de fondos de gráficos
+        'text': '#E5BEEC',  # Color de texto similar al header
+        'button_bg': '#E5BEEC',  # Color del header
+        'button_fg': '#000000',
+        'frame_bg': '#2A2F4F',
+        'canvas_bg': '#2A2F4F', 
+        'progress': '#E5BEEC',
+        'border': '#917FB3',
+        'highlight': '#E5BEEC',
+        'chart1': '#E5BEEC',
+        'chart2': '#D9FFCA',  # Color de porcentajes positivos
+        'grid': '#917FB3'
     },
     'Azul Profundo': {
         'bg': '#1a1a2f', 'fg': '#ffffff', 'circle_bg': '#2a2a4f',
@@ -109,7 +117,7 @@ def get_default_state():
         'paused_time': None,
         'timer_start': None,
         'last_update': None,
-        'current_theme': 'Claro',
+        'current_theme': 'Oscuro',  # Cambiado a Oscuro por defecto
         'activities': [],
         'current_activity': "",
         'sub_activity': "",
@@ -734,6 +742,139 @@ def edit_project_modal():
 # Funciones de visualización (Mejoradas)
 # ==============================================
 
+def create_metric_cards():
+    """Crea tarjetas de métricas similares al diseño Tkinter"""
+    state = st.session_state.pomodoro_state
+    achievements = state['achievements']
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Revenue card equivalent - Tiempo total de estudio
+        st.markdown(f"""
+        <div style="background-color: #2A2F4F; padding: 15px; border-radius: 10px; text-align: center;">
+            <p style="color: #FFFFFF; margin: 0; font-size: 14px;">Tiempo Total</p>
+            <h2 style="color: #FFFFFF; margin: 5px 0;">{achievements['total_hours']:.1f}h</h2>
+            <p style="color: #D9FFCA; margin: 0; font-size: 16px;">+5.8%</p>
+            <p style="color: #FFFFFF; margin: 0; font-size: 10px;">Semana Pasada</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        # Customers card equivalent - Pomodoros completados
+        st.markdown(f"""
+        <div style="background-color: #2A2F4F; padding: 15px; border-radius: 10px; text-align: center;">
+            <p style="color: #FFFFFF; margin: 0; font-size: 14px;">Pomodoros</p>
+            <h2 style="color: #FFFFFF; margin: 5px 0;">{achievements['pomodoros_completed']}</h2>
+            <p style="color: #D9FFCA; margin: 0; font-size: 16px;">+9.4%</p>
+            <p style="color: #FFFFFF; margin: 0; font-size: 10px;">Semana Pasada</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        # Products sold equivalent - Tareas completadas
+        st.markdown(f"""
+        <div style="background-color: #2A2F4F; padding: 15px; border-radius: 10px; text-align: center;">
+            <p style="color: #FFFFFF; margin: 0; font-size: 14px;">Tareas Completadas</p>
+            <h2 style="color: #FFFFFF; margin: 5px 0;">{achievements['tasks_completed']}</h2>
+            <p style="color: #D9FFCA; margin: 0; font-size: 16px;">+3.6%</p>
+            <p style="color: #FFFFFF; margin: 0; font-size: 10px;">Semana Pasada</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+def create_dashboard_charts():
+    """Crea gráficos similares a los del diseño Tkinter"""
+    state = st.session_state.pomodoro_state
+    
+    # Análisis de datos para los gráficos
+    data = analyze_data()
+    
+    # Crear dos columnas para los gráficos
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Gráfico de área (similar al diseño)
+        st.subheader("Tiempo por Día")
+        if data['raw_data']:
+            # Agrupar por fecha
+            df_dates = pd.DataFrame([
+                {'date': r['date'], 'hours': r['duration']} 
+                for r in data['raw_data']
+            ])
+            daily_totals = df_dates.groupby('date').sum().reset_index()
+            
+            fig = px.area(
+                daily_totals, x='date', y='hours',
+                title="Evolución del Tiempo por Día",
+                labels={'date': 'Fecha', 'hours': 'Horas'}
+            )
+            fig.update_layout(
+                plot_bgcolor="#917FB3",
+                paper_bgcolor="#917FB3",
+                font_color="white"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Gráfico circular de barras (similar al diseño)
+        st.subheader("Distribución por Actividad")
+        if data['activities']:
+            # Preparar datos para gráfico polar
+            activities = list(data['activities'].keys())
+            hours = list(data['activities'].values())
+            
+            # Crear ángulos equidistantes
+            angles = np.linspace(0, 2*np.pi, len(activities), endpoint=False)
+            
+            # Crear gráfico polar
+            fig = go.Figure(go.Barpolar(
+                r=hours,
+                theta=np.degrees(angles),
+                width=np.full(len(angles), 20),
+                marker_color=px.colors.qualitative.Pastel,
+                marker_line_color="black",
+                marker_line_width=1,
+                opacity=0.8
+            ))
+            
+            fig.update_layout(
+                polar=dict(
+                    radialaxis=dict(visible=True, showticklabels=False),
+                    angularaxis=dict(showticklabels=True, tickvals=np.degrees(angles), ticktext=activities)
+                ),
+                showlegend=False,
+                plot_bgcolor="#917FB3",
+                paper_bgcolor="#917FB3",
+                font_color="white"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+def create_session_table():
+    """Crea una tabla de sesiones con mejor diseño"""
+    state = st.session_state.pomodoro_state
+    
+    if not state['session_history']:
+        st.info("No hay sesiones registradas")
+        return
+    
+    # Crear DataFrame con las sesiones
+    df = pd.DataFrame(state['session_history'])
+    
+    # Mostrar tabla con estilo mejorado
+    st.dataframe(
+        df,
+        use_container_width=True,
+        column_config={
+            "Fecha": st.column_config.DateColumn("Fecha"),
+            "Hora Inicio": st.column_config.TextColumn("Hora Inicio"),
+            "Tiempo Activo (horas)": st.column_config.NumberColumn("Horas", format="%.2f"),
+            "Actividad": st.column_config.TextColumn("Actividad"),
+            "Proyecto": st.column_config.TextColumn("Proyecto"),
+            "Tarea": st.column_config.TextColumn("Tarea")
+        },
+        hide_index=True
+    )
+
 def hierarchical_view():
     """Muestra la vista jerárquica de actividades, proyectos y tareas"""
     state = st.session_state.pomodoro_state
@@ -922,6 +1063,28 @@ def display_filtered_tasks(filter_activity, filter_project, task_status):
                             st.session_state.pomodoro_state['tasks'].remove(task)
                         st.success("Tarea eliminada!")
                         st.session_state.force_rerun = True
+
+# ==============================================
+# Pestaña de Dashboard (Nueva)
+# ==============================================
+
+def dashboard_tab():
+    """Pestaña de Dashboard unificado con métricas y gráficos"""
+    st.title("📊 Dashboard de Productividad")
+    
+    # Mostrar métricas principales
+    create_metric_cards()
+    
+    st.divider()
+    
+    # Mostrar gráficos
+    create_dashboard_charts()
+    
+    st.divider()
+    
+    # Mostrar tabla de sesiones recientes
+    st.subheader("Sesiones Recientes")
+    create_session_table()
 
 # ==============================================
 # Pestaña de Temporizador (Mejorada)
@@ -1275,13 +1438,14 @@ def timer_tab():
     # Forzar actualización de la interfaz si es necesario
     time.sleep(0.1)
     st.rerun()
+
 # ==============================================
 # Pestaña de Estadísticas (Mejorada)
 # ==============================================
 
 def stats_tab():
     """Muestra la pestaña de estadísticas"""
-    st.title("📊 Estadísticas Avanzadas")
+    st.title("📈 Estadísticas Detalladas")
     
     if not st.session_state.pomodoro_state['session_history']:
         st.warning("No hay datos de sesiones registrados.")
@@ -1736,9 +1900,11 @@ def info_tab():
         ### Versión
         Estás usando la versión 1.0.0 de Pomodoro Pro
         """)
+
 # ==============================================
-# Barra lateral (Mejorada)
+# Funciones de utilidad para alertas
 # ==============================================
+
 def check_alerts():
     """Verifica alertas y notificaciones para el usuario"""
     state = st.session_state.pomodoro_state
@@ -1782,7 +1948,11 @@ def check_alerts():
         alerts.append(f"🔥 ¡Llevas una racha de {state['achievements']['streak_days']} días!")
     
     return alerts
-    
+
+# ==============================================
+# Barra lateral (Mejorada)
+# ==============================================
+
 def sidebar():
     """Muestra la barra lateral con navegación y controles"""
     # Mostrar sección de autenticación
@@ -1794,22 +1964,50 @@ def sidebar():
     state = st.session_state.pomodoro_state
 
     with st.sidebar:
-        st.title("Pomodoro Pro 🍅")
+        # Aplicar estilo similar al diseño Tkinter
+        st.markdown("""
+        <style>
+        .sidebar .sidebar-content {
+            background-color: #2A2F4F;
+            color: white;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Header con logo y nombre
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            st.image("https://via.placeholder.com/40", width=40)  # Reemplazar con tu logo
+        with col2:
+            st.title("PyDash")
+        
+        st.divider()
+        
+        # Navegación por pestañas
+        st.subheader("Navegación", anchor=False)
+        tabs = st.radio("Selecciona una sección:", 
+                       ["📊 Dashboard", "🍅 Temporizador", "📋 Tareas", 
+                        "📈 Estadísticas", "⚙️ Configuración", "ℹ️ Info"],
+                       key='sidebar_nav')
+        
+        st.divider()
         
         # Mostrar alertas si existen
         alerts = check_alerts()
         if alerts:
-            st.subheader("🔔 Alertas")
+            st.subheader("🔔 Alertas", anchor=False)
             for alert in alerts:
                 st.warning(alert, icon="⚠️")
+            st.divider()
         
-        # Navegación por pestañas
-        st.subheader("Navegación")
-        tabs = st.radio("Selecciona una sección:", 
-                       ["🍅 Temporizador", "📊 Estadísticas", "📋 Tareas", 
-                        "🏆 Logros", "⚙️ Configuración", "ℹ️ Info"],
-                       key='sidebar_nav')
-
+        # Información rápida de progreso
+        st.subheader("Progreso Hoy", anchor=False)
+        today = date.today().strftime("%Y-%m-%d")
+        today_sessions = [s for s in state['session_history'] if s.get('Fecha') == today]
+        today_hours = sum(s.get('Tiempo Activo (horas)', 0) for s in today_sessions)
+        
+        st.metric("Horas hoy", f"{today_hours:.2f}")
+        
         # Opciones avanzadas (colapsables)
         with st.expander("Opciones Avanzadas", expanded=False):
             # Características de estudio
@@ -1832,14 +2030,15 @@ def sidebar():
         
         # Cerrar sesión
         st.divider()
-        if st.button("🚪 Cerrar Sesión", key="logout"):
+        if st.button("🚪 Cerrar Sesión", key="logout", use_container_width=True):
             logout()
+
 # ==============================================
 # Función principal (Mejorada)
 # ==============================================
 
 def main():
-    """Función principal de la aplicación"""
+    """Función principal de la aplicación - Versión mejorada"""
     # Inicializar el estado si no existe
     if 'pomodoro_state' not in st.session_state:
         st.session_state.pomodoro_state = get_default_state()
@@ -1848,7 +2047,7 @@ def main():
     if 'force_rerun' not in st.session_state:
         st.session_state.force_rerun = False
     
-    # Barra lateral
+    # Barra lateral mejorada
     sidebar()
     
     # Verificar autenticación - si no está autenticado, no mostrar el contenido principal
@@ -1858,19 +2057,19 @@ def main():
 
     # Obtener la pestaña seleccionada
     if 'sidebar_nav' not in st.session_state:
-        st.session_state.sidebar_nav = "🍅 Temporizador"
+        st.session_state.sidebar_nav = "📊 Dashboard"  # Cambiado a Dashboard por defecto
     
     selected_tab = st.session_state.sidebar_nav
 
     # Mostrar la pestaña correspondiente
-    if selected_tab == "🍅 Temporizador":
+    if selected_tab == "📊 Dashboard":
+        dashboard_tab()
+    elif selected_tab == "🍅 Temporizador":
         timer_tab()
-    elif selected_tab == "📊 Estadísticas":
-        stats_tab()
     elif selected_tab == "📋 Tareas":
         tasks_tab()
-    elif selected_tab == "🏆 Logros":
-        show_achievements()
+    elif selected_tab == "📈 Estadísticas":
+        stats_tab()
     elif selected_tab == "⚙️ Configuración":
         settings_tab()
     elif selected_tab == "ℹ️ Info":
