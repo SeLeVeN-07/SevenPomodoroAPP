@@ -1982,24 +1982,7 @@ def sidebar():
             st.title("SeLeVeN")
         
         st.divider()
-        
-        # Navegación por pestañas
-        st.subheader("Navegación", anchor=False)
-        tabs = st.radio("Selecciona una sección:", 
-                       ["📊 Dashboard", "🍅 Temporizador", "📋 Tareas", 
-                        "📈 Estadísticas", "⚙️ Configuración", "ℹ️ Info"],
-                       key='sidebar_nav')
-        
-        st.divider()
-        
-        # Mostrar alertas si existen
-        alerts = check_alerts()
-        if alerts:
-            st.subheader("🔔 Alertas", anchor=False)
-            for alert in alerts:
-                st.warning(alert, icon="⚠️")
-            st.divider()
-        
+
         # Información rápida de progreso - CORREGIDO
         st.subheader("Progreso Hoy", anchor=False)
         today = datetime.datetime.now().date()
@@ -2025,6 +2008,23 @@ def sidebar():
         today_hours = sum(float(session.get('Tiempo Activo (horas)', 0)) for session in today_sessions)
         
         st.metric("Horas hoy", f"{today_hours:.2f}")
+        
+        # Navegación por pestañas
+        st.subheader("Navegación", anchor=False)
+        tabs = st.radio("Selecciona una sección:", 
+                       ["📊 Dashboard", "🍅 Temporizador", "📋 Tareas", 
+                        "📈 Estadísticas", "⚙️ Configuración", "ℹ️ Info"],
+                       key='sidebar_nav')
+        
+        st.divider()
+        
+        # Mostrar alertas si existen
+        alerts = check_alerts()
+        if alerts:
+            st.subheader("🔔 Alertas", anchor=False)
+            for alert in alerts:
+                st.warning(alert, icon="⚠️")
+            st.divider()
         
         # Opciones avanzadas (colapsables)
         with st.expander("Opciones Avanzadas", expanded=False):
