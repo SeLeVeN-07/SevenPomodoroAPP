@@ -1,7 +1,8 @@
+
 # -*- coding: utf-8 -*-
 """
 Pomodoro Pro - Streamlit Cloud Version con Supabase y Autenticación
-Versión Mejorada
+Versión Mejorada con selección persistente
 """
 import streamlit as st
 import pandas as pd
@@ -115,6 +116,7 @@ def get_default_state():
         'tasks': [],
         'projects': [],
         'current_project': "",
+        'current_task': "",  # Nueva variable para guardar la tarea seleccionada
         'deadlines': [],
         'study_mode': False,
         'study_goals': [],
@@ -133,7 +135,11 @@ def get_default_state():
         'drag_source': None,
         'session_history': [],
         'last_updated': time.time(),
-        'force_rerun': False
+        'force_rerun': False,
+        # Nuevos campos para los filtros
+        'filter_activity': "Todas",
+        'filter_project': "Todos",
+        'task_status_filter': "Todas"
     }
 
 def format_time(seconds):
@@ -331,15 +337,16 @@ def save_to_supabase():
         return False
     
     try:
-        state = st.session_state.pomodoro_state.copy()
+        # Usar el estado actual directamente, sin copia
+        state = st.session_state.pomodoro_state
         username = st.session_state.username
         
-        # Asegurar que completed_tasks está incluido en los datos
+        # Convertir el estado actual a formato ISO
         data_to_save = convert_dates_to_iso(state)
         
         # Usar UPDATE en lugar de UPSERT para no afectar password_hash
         response = supabase_service.table('users').update({
-            'data': data_to_save,  # Guardar todo el estado, incluyendo completed_tasks
+            'data': data_to_save,
             'last_updated': datetime.datetime.now().isoformat()
         }).eq('username', username).execute()
         
@@ -370,10 +377,9 @@ def load_from_supabase():
             
         imported_data = convert_iso_to_dates(response.data[0]['data'])
         
-        # Actualiza el estado completo, incluyendo completed_tasks
-        for key in imported_data.keys():
-            if key in st.session_state.pomodoro_state:
-                st.session_state.pomodoro_state[key] = imported_data[key]
+        # Actualiza el estado completo
+        for key, value in imported_data.items():
+            st.session_state.pomodoro_state[key] = value
         
         st.success("Datos cargados correctamente!")
         return True
@@ -381,117 +387,16 @@ def load_from_supabase():
         st.warning(f"No se encontraron datos o error: {str(e)}")
         return False
 
-def export_data():
-    """Exporta todos los datos a un JSON comprimido (backup local)"""
-    state = st.session_state.pomodoro_state.copy()
-    
-    # Preparar datos para exportación - incluir completed_tasks
-    export_dict = {
-        'activities': state['activities'],
-        'tasks': state['tasks'],
-        'completed_tasks': state['completed_tasks'],  # Asegurar que se incluyen
-        'projects': state['projects'],
-        'achievements': state['achievements'],
-        'session_history': state['session_history'],
-        'settings': {
-            'work_duration': state['work_duration'],
-            'short_break': state['short_break'],
-            'long_break': state['long_break'],
-            'sessions_before_long': state['sessions_before_long'],
-            'total_sessions': state['total_sessions'],
-            'current_theme': state['current_theme']
-        }
-    }
-    
-    # Resto del código sin cambios...
-    # Convertir fechas a formato ISO
-    export_dict = convert_dates_to_iso(export_dict)
-    
-    # Convertir a JSON y comprimir
-    json_str = json.dumps(export_dict, indent=2, ensure_ascii=False, default=json_serial)
-    compressed = gzip.compress(json_str.encode('utf-8'))
-    
-    # Crear archivo descargable
-    b64 = base64.b64encode(compressed).decode()
-    href = f'<a href="data:application/gzip;base64,{b64}" download="pomodoro_backup.json.gz">Descargar backup</a>'
-    st.markdown(href, unsafe_allow_html=True)
-
-def import_data(uploaded_file):
-    """Importa datos desde un archivo JSON comprimido (backup local)"""
-    try:
-        # Descomprimir y cargar
-        compressed = uploaded_file.read()
-        json_str = gzip.decompress(compressed).decode('utf-8')
-        imported_data = json.loads(json_str)
-        
-        # Convertir cadenas ISO a objetos fecha
-        imported_data = convert_iso_to_dates(imported_data)
-        
-        # Actualizar estado - incluir completed_tasks
-        state = st.session_state.pomodoro_state
-        state['activities'] = imported_data.get('activities', [])
-        state['tasks'] = imported_data.get('tasks', [])
-        state['completed_tasks'] = imported_data.get('completed_tasks', [])  # Asegurar carga
-        state['projects'] = imported_data.get('projects', [])
-        state['achievements'] = imported_data.get('achievements', state['achievements'])
-        state['session_history'] = imported_data.get('session_history', [])
-        
-        # Configuración
-        settings = imported_data.get('settings', {})
-        state['work_duration'] = settings.get('work_duration', 25*60)
-        state['short_break'] = settings.get('short_break', 5*60)
-        state['long_break'] = settings.get('long_break', 15*60)
-        state['sessions_before_long'] = settings.get('sessions_before_long', 4)
-        state['total_sessions'] = settings.get('total_sessions', 8)
-        state['current_theme'] = settings.get('current_theme', 'Claro')
-        
-        st.success("Datos importados correctamente!")
-        st.session_state.force_rerun = True
-    except Exception as e:
-        st.error(f"Error al importar datos: {str(e)}")
-
-def load_from_supabase():
-    """Carga datos desde Supabase"""
-    if not check_authentication():
-        st.error("Debes iniciar sesión para cargar datos")
-        return False
-    
-    try:
-        username = st.session_state.username
-        
-        # Usar cliente de servicio para bypass RLS
-        response = supabase_service.table('users') \
-            .select('data') \
-            .eq('username', username) \
-            .execute()
-        
-        if not response.data:
-            st.warning("No se encontraron datos para este usuario")
-            return False
-            
-        imported_data = convert_iso_to_dates(response.data[0]['data'])
-        
-        # Actualiza el estado completo, incluyendo completed_tasks
-        for key in imported_data.keys():
-            if key in st.session_state.pomodoro_state:
-                st.session_state.pomodoro_state[key] = imported_data[key]
-        
-        st.success("Datos cargados correctamente!")
-        return True
-    except Exception as e:
-        st.warning(f"No se encontraron datos o error: {str(e)}")
-        return False
-        
 # Funciones de export/import originales como respaldo
 def export_data():
     """Exporta todos los datos a un JSON comprimido (backup local)"""
     state = st.session_state.pomodoro_state.copy()
     
-    # Preparar datos para exportación - incluir completed_tasks
+    # Preparar datos para exportación
     export_dict = {
         'activities': state['activities'],
         'tasks': state['tasks'],
-        'completed_tasks': state['completed_tasks'],  # Asegurar que se incluyen
+        'completed_tasks': state['completed_tasks'],
         'projects': state['projects'],
         'achievements': state['achievements'],
         'session_history': state['session_history'],
@@ -528,11 +433,11 @@ def import_data(uploaded_file):
         # Convertir cadenas ISO a objetos fecha
         imported_data = convert_iso_to_dates(imported_data)
         
-        # Actualizar estado - incluir completed_tasks
+        # Actualizar estado
         state = st.session_state.pomodoro_state
         state['activities'] = imported_data.get('activities', [])
         state['tasks'] = imported_data.get('tasks', [])
-        state['completed_tasks'] = imported_data.get('completed_tasks', [])  # Asegurar carga
+        state['completed_tasks'] = imported_data.get('completed_tasks', [])
         state['projects'] = imported_data.get('projects', [])
         state['achievements'] = imported_data.get('achievements', state['achievements'])
         state['session_history'] = imported_data.get('session_history', [])
@@ -550,7 +455,6 @@ def import_data(uploaded_file):
         st.session_state.force_rerun = True
     except Exception as e:
         st.error(f"Error al importar datos: {str(e)}")
-
 
 # ==============================================
 # Funciones de registro de sesiones (Mejoradas)
@@ -560,11 +464,12 @@ def log_session():
     """Registra una sesión completada en el historial"""
     state = st.session_state.pomodoro_state
     if state['total_active_time'] >= 0.1:
-        minutes = round(state['total_active_time'] / 60, 2)
+        # Convertir a horas en lugar de minutos
+        hours = round(state['total_active_time'] / 3600, 2)  # Cambiado de minutos a horas
         log_entry = {
             'Fecha': datetime.datetime.now().strftime("%Y-%m-%d"),
             'Hora Inicio': state['start_time'].strftime("%H:%M:%S") if state['start_time'] else datetime.datetime.now().strftime("%H:%M:%S"),
-            'Tiempo Activo (min)': minutes,
+            'Tiempo Activo (horas)': hours,  # Cambiado de minutos a horas
             'Actividad': state['current_activity'],
             'Proyecto': state['current_project'],
             'Tarea': state.get('current_task', '')
@@ -576,7 +481,7 @@ def log_session():
         # Actualizar logros
         if state['current_phase'] == "Trabajo":
             state['achievements']['pomodoros_completed'] += 1
-            state['achievements']['total_hours'] += minutes / 60
+            state['achievements']['total_hours'] += hours  # Ya está en horas
             
             # Verificar racha diaria
             today = date.today()
@@ -588,8 +493,11 @@ def log_session():
                 else:
                     state['achievements']['streak_days'] = 1
                 state['last_session_date'] = today
+        
+        # Guardar cambios en Supabase
+        save_to_supabase()
 
-@st.cache_data(ttl=300)  # Cache por 5 minutos
+@st.cache_data(ttl=300)
 def analyze_data():
     """Analiza los datos del historial de sesiones"""
     data = {
@@ -597,35 +505,108 @@ def analyze_data():
         'projects': defaultdict(float),
         'tasks': defaultdict(float),
         'daily_total': defaultdict(float),
-        'raw_data': []
+        'raw_data': [],
+        'errors': []  # Para rastrear errores en el procesamiento
     }
     
-    for entry in st.session_state.pomodoro_state['session_history']:
+    for i, entry in enumerate(st.session_state.pomodoro_state['session_history']):
         try:
-            date_obj = datetime.datetime.strptime(entry['Fecha'], "%Y-%m-%d").date()
-            hour = int(entry['Hora Inicio'].split(':')[0]) if ':' in entry['Hora Inicio'] else 0
-            duration = float(entry['Tiempo Activo (min)'])
-            activity = entry['Actividad'].strip()
+            # Depuración: mostrar información de la entrada
+            print(f"Procesando entrada {i}: {entry}")
+            
+            # Parsear fecha (manejar tanto strings como objetos date)
+            fecha = entry['Fecha']
+            if isinstance(fecha, str):
+                date_obj = datetime.datetime.strptime(fecha, "%Y-%m-%d").date()
+                print(f"  Fecha como string: {fecha} -> {date_obj}")
+            elif isinstance(fecha, (datetime.date, datetime.datetime)):
+                date_obj = fecha if isinstance(fecha, datetime.date) else fecha.date()
+                print(f"  Fecha como objeto: {fecha} -> {date_obj}")
+            else:
+                raise ValueError(f"Tipo de fecha no reconocido: {type(fecha)}")
+            
+            # Parsear hora de inicio
+            hora_inicio = entry.get('Hora Inicio', '00:00:00')
+            if isinstance(hora_inicio, str) and ':' in hora_inicio:
+                hour_parts = hora_inicio.split(':')
+                hour = int(hour_parts[0])
+            elif isinstance(hora_inicio, datetime.time):
+                hour = hora_inicio.hour
+            else:
+                hour = 0
+            
+            # Obtener duración (manejar diferentes formatos)
+            duration = 0
+            if 'Tiempo Activo (min)' in entry:
+                duration = float(entry['Tiempo Activo (min)']) / 60  # Convertir minutos a horas
+                print(f"  Duración en minutos: {entry['Tiempo Activo (min)']} -> {duration} horas")
+            elif 'Tiempo Activo (horas)' in entry:
+                duration = float(entry['Tiempo Activo (horas)'])
+                print(f"  Duración en horas: {duration}")
+            else:
+                print(f"  No se encontró campo de duración en la entrada {i}")
+                
+            activity = entry.get('Actividad', '').strip()
             project = entry.get('Proyecto', '').strip()
             task = entry.get('Tarea', '').strip()
 
+            print(f"  Actividad: {activity}, Proyecto: {project}, Tarea: {task}")
+
+            # Acumular datos
             data['activities'][activity] += duration
             if project:
                 data['projects'][project] += duration
             if task:
                 data['tasks'][task] += duration
             data['daily_total'][entry['Fecha']] += duration
+            
+            # Guardar datos crudos
             data['raw_data'].append({
-                'date': date_obj, 'hour': hour, 
-                'duration': duration, 'activity': activity,
-                'project': project, 'task': task
+                'date': date_obj, 
+                'hour': hour, 
+                'duration': duration, 
+                'activity': activity,
+                'project': project, 
+                'task': task
             })
+            
+            print(f"  Entrada {i} procesada correctamente")
+            
         except Exception as e:
-            print(f"Error procesando entrada: {e}")
+            error_msg = f"Error procesando entrada {i}: {e}"
+            print(error_msg)
+            data['errors'].append(error_msg)
+    
+    # Depuración: mostrar resumen
+    print(f"Total de entradas procesadas: {len(data['raw_data'])}")
+    print(f"Total de errores: {len(data['errors'])}")
+    print(f"Tiempo total en actividades: {sum(data['activities'].values())} horas")
+    
     return data
+    
+def on_close():
+    """Función que se ejecuta al cerrar la aplicación"""
+    if check_authentication():
+        # Verificar si el timer estaba corriendo y si hay un start_time válido
+        state = st.session_state.pomodoro_state
+        if state['timer_running'] and state['start_time'] is not None:
+            # Calcular el tiempo activo hasta el momento de cierre
+            current_elapsed = time.time() - state['start_time'].timestamp()
+            state['total_active_time'] += current_elapsed
+        
+        # Solo registrar si fue fase de trabajo y hay tiempo acumulado
+        if state['current_phase'] == "Trabajo" and state['total_active_time'] >= 0.1:
+            log_session()
+        
+        # Guardar el estado en Supabase
+        save_to_supabase()
 
 def logout():
     """Cierra sesión limpiando todo"""
+    # Guardar el estado actual antes de cerrar sesión
+    if check_authentication():
+        on_close()
+    
     st.session_state.clear()
     st.session_state.pomodoro_state = get_default_state()
     st.session_state.force_rerun = True
@@ -633,6 +614,25 @@ def logout():
 # ==============================================
 # Funciones de gestión de tareas (Mejoradas)
 # ==============================================
+
+def complete_task(task):
+    """Marca una tarea como completada y guarda en Supabase"""
+    state = st.session_state.pomodoro_state
+    
+    # Encontrar la tarea en la lista de tareas pendientes
+    for t in state['tasks']:
+        if t['name'] == task['name'] and t['project'] == task['project']:
+            t['completed'] = True
+            t['completed_date'] = date.today()
+            state['tasks'].remove(t)
+            state['completed_tasks'].append(t)
+            state['achievements']['tasks_completed'] += 1
+            break
+    
+    # Guardar cambios
+    save_to_supabase()
+    st.success("Tarea completada!")
+    st.session_state.force_rerun = True
 
 def edit_task_modal():
     """Muestra el modal para editar una tarea"""
@@ -931,21 +931,34 @@ def timer_tab():
     """Muestra la pestaña del temporizador Pomodoro"""
     state = st.session_state.pomodoro_state
     
+    # Inicializar variables de control del temporizador si no existen
+    if 'timer_start' not in st.session_state:
+        st.session_state.timer_start = None
+    if 'last_update' not in st.session_state:
+        st.session_state.last_update = None
+    if 'paused_time' not in st.session_state:
+        st.session_state.paused_time = None
+    
     # Mostrar materia actual si está en modo estudio
     if state['study_mode'] and state['current_activity']:
         st.header(f"Actividad: {state['current_activity']}")
 
-    # Selector de actividad
+    # Selector de actividad con clave única
     col1, col2 = st.columns(2)
     with col1:
         if not state['activities']:
             st.warning("No hay actividades disponibles. Agrega actividades en la pestaña de Configuración")
             state['current_activity'] = ""
         else:
+            # Asegurar que current_activity esté en la lista de actividades
+            if state['current_activity'] not in state['activities']:
+                state['current_activity'] = state['activities'][0] if state['activities'] else ""
+
             state['current_activity'] = st.selectbox(
                 "Actividad",
                 state['activities'],
-                key="current_activity"
+                index=state['activities'].index(state['current_activity']) if state['current_activity'] in state['activities'] else 0,
+                key="timer_activity_selector"
             )
 
     # Eliminar el campo de subactividad (ya no se usará)
@@ -962,17 +975,30 @@ def timer_tab():
                     'activity': state['current_activity']
                 })
                 st.success("Proyecto creado!")
+                save_to_supabase()  # Guardar después de crear proyecto
                 st.session_state.force_rerun = True
             elif new_project_name in [p['name'] for p in state['projects']]:
                 st.error("Ya existe un proyecto con ese nombre")
 
-    # Selector de proyecto (solo proyectos asociados a la actividad actual)
+    # Selector de proyecto (solo proyectos asociados a la actividad actual) con clave única
     available_projects = [p['name'] for p in state['projects'] if p['activity'] == state['current_activity']]
     if available_projects:
+        # Si el proyecto actual no está en la lista de disponibles, resetear a "Ninguno" o al primero
+        if state['current_project'] not in available_projects:
+            state['current_project'] = "Ninguno"
+
+        # Encontrar el índice del proyecto actual en la lista de opciones (available_projects + ["Ninguno"])
+        options = available_projects + ["Ninguno"]
+        try:
+            index = options.index(state['current_project'])
+        except ValueError:
+            index = 0
+
         state['current_project'] = st.selectbox(
             "Proyecto",
-            available_projects + ["Ninguno"],
-            key="current_project"
+            options,
+            index=index,
+            key="timer_project_selector"
         )
     else:
         st.info("No hay proyectos asociados a esta actividad. Puedes crear uno arriba.")
@@ -989,10 +1015,22 @@ def timer_tab():
         if project_tasks:
             # Crear selector de tareas existentes
             task_names = [t['name'] for t in project_tasks]
+            # Asegurar que la tarea actual esté en la lista
+            if 'current_task' not in state or state['current_task'] not in task_names:
+                state['current_task'] = task_names[0] if task_names else ""
+
+            options = ["-- Seleccionar --"] + task_names + ["+ Crear nueva tarea"]
+            # Encontrar el índice de la tarea actual
+            try:
+                index = task_names.index(state['current_task']) + 1
+            except ValueError:
+                index = 0
+
             selected_task = st.selectbox(
                 "Seleccionar tarea existente", 
-                ["-- Seleccionar --"] + task_names + ["+ Crear nueva tarea"],
-                key="select_existing_task"
+                options,
+                index=index,
+                key="timer_task_selector"
             )
             
             if selected_task == "+ Crear nueva tarea":
@@ -1012,6 +1050,7 @@ def timer_tab():
                     state['tasks'].append(new_task)
                     state['current_task'] = new_task_name
                     st.success("Tarea creada!")
+                    save_to_supabase()  # Guardar después de crear tarea
                     st.session_state.force_rerun = True
             elif selected_task != "-- Seleccionar --":
                 state['current_task'] = selected_task
@@ -1031,6 +1070,7 @@ def timer_tab():
                 state['tasks'].append(new_task)
                 state['current_task'] = new_task_name
                 st.success("Tarea creada!")
+                save_to_supabase()  # Guardar después de crear tarea
                 st.session_state.force_rerun = True
 
     # Verificar si hay una actividad seleccionada antes de mostrar el temporizador
@@ -1067,10 +1107,12 @@ def timer_tab():
         font={'color': theme['text']}
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    # Usar un contenedor para el gráfico que no force rerenderizados completos
+    chart_placeholder = st.empty()
+    chart_placeholder.plotly_chart(fig, use_container_width=True)
 
-    # Controles del temporizador
-    col1, col2, col3 = st.columns(3)
+    # Controles del temporizador - ahora con 4 columnas para incluir el botón de reinicio
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         if st.button("▶️ Iniciar" if not state['timer_running'] else "▶️ Reanudar",
@@ -1083,6 +1125,7 @@ def timer_tab():
                 # Iniciar el temporizador
                 st.session_state.timer_start = time.time()
                 st.session_state.last_update = time.time()
+                save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
 
     with col2:
@@ -1091,13 +1134,16 @@ def timer_tab():
             if state['timer_running'] and not state['timer_paused']:
                 state['timer_paused'] = True
                 state['paused_time'] = time.time()
+                st.session_state.paused_time = time.time()
+                save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
             elif state['timer_paused']:
                 state['timer_paused'] = False
                 # Ajustar el tiempo de inicio para compensar la pausa
-                pause_duration = time.time() - state['paused_time']
+                pause_duration = time.time() - st.session_state.paused_time
                 st.session_state.timer_start += pause_duration
                 st.session_state.last_update = time.time()
+                save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
 
     with col3:
@@ -1108,7 +1154,7 @@ def timer_tab():
             if was_work:
                 state['session_count'] += 1
                 if state['total_active_time'] >= 0.1:
-                    log_session()
+                    log_session()  # Esta función ahora guarda automáticamente
                 
                 if state['session_count'] >= state['total_sessions']:
                     st.success("¡Todas las sesiones completadas!")
@@ -1117,6 +1163,7 @@ def timer_tab():
                     state['remaining_time'] = state['work_duration']
                     state['timer_running'] = False
                     state['timer_paused'] = False
+                    save_to_supabase()  # Guardar estado
                     st.session_state.force_rerun = True
             
             # Determinar siguiente fase
@@ -1125,18 +1172,42 @@ def timer_tab():
             state['total_active_time'] = 0
             state['timer_running'] = False
             state['timer_paused'] = False
+            save_to_supabase()  # Guardar estado
             st.session_state.force_rerun = True
 
-        # Contador de sesiones
+    with col4:
+        if st.button("🔄 Reiniciar", use_container_width=True, key="reset_timer"):
+            # Función de reinicio del temporizador
+            # Si el temporizador está en ejecución y es fase de trabajo, guardar el tiempo transcurrido
+            if state['timer_running'] and state['current_phase'] == "Trabajo" and state['total_active_time'] >= 0.1:
+                log_session()  # Guarda la sesión incompleta
+            
+            # Si el temporizador está en pausa, no guardar duplicados
+            state['timer_running'] = False
+            state['timer_paused'] = False
+            state['session_count'] = 0
+            state['current_phase'] = "Trabajo"
+            state['remaining_time'] = state['work_duration']
+            state['total_active_time'] = 0
+            state['start_time'] = None
+            state['paused_time'] = None
+            st.session_state.timer_start = None
+            st.session_state.last_update = None
+            st.session_state.paused_time = None
+            st.success("Temporizador reiniciado")
+            save_to_supabase()  # Guardar estado
+            st.session_state.force_rerun = True
+
+    # Contador de sesiones
     st.write(f"Sesiones completadas: {state['session_count']}/{state['total_sessions']}")
 
     # Actualizar el temporizador si está en ejecución
     if state['timer_running'] and not state['timer_paused']:
         current_time = time.time()
-        elapsed = current_time - st.session_state.last_update
         
-        # Solo actualizar si ha pasado al menos 0.5 segundos
-        if elapsed >= 0.5:
+        # Solo actualizar si ha pasado al menos 1 segundo
+        if current_time - st.session_state.last_update >= 1.0:
+            elapsed = current_time - st.session_state.last_update
             st.session_state.last_update = current_time
 
             state['remaining_time'] -= elapsed
@@ -1148,7 +1219,7 @@ def timer_tab():
                 
                 if was_work:
                     if state['total_active_time'] >= 0.1:
-                        log_session()
+                        log_session()  # Esta función ahora guarda automáticamente
                     state['session_count'] += 1
                     
                     if state['session_count'] >= state['total_sessions']:
@@ -1158,6 +1229,7 @@ def timer_tab():
                         state['remaining_time'] = state['work_duration']
                         state['timer_running'] = False
                         state['timer_paused'] = False
+                        save_to_supabase()  # Guardar estado
                         st.session_state.force_rerun = True
                 
                 # Determinar siguiente fase
@@ -1172,13 +1244,37 @@ def timer_tab():
                 else:
                     st.toast("¡Descanso completado! Volvamos al trabajo.", icon="💪")
                 
+                save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
+            else:
+                # Solo actualizar el gráfico sin forzar un rerun completo
+                fig = go.Figure(go.Indicator(
+                    mode = "gauge+number",
+                    value = state['remaining_time'],
+                    number = {'suffix': "s", 'font': {'size': 40}},
+                    gauge = {
+                        'axis': {'range': [0, phase_duration], 'visible': False},
+                        'bar': {'color': get_phase_color(state['current_phase'])},
+                        'steps': [
+                            {'range': [0, phase_duration], 'color': theme['circle_bg']}
+                        ]
+                    },
+                    domain = {'x': [0, 1], 'y': [0, 1]},
+                    title = {'text': f"{state['current_phase']} - {format_time(state['remaining_time'])}", 'font': {'size': 24}}
+                ))
+
+                fig.update_layout(
+                    height=300,
+                    margin=dict(l=10, r=10, t=80, b=10),
+                    paper_bgcolor=theme['bg'],
+                    font={'color': theme['text']}
+                )
+                
+                chart_placeholder.plotly_chart(fig, use_container_width=True)
 
     # Forzar actualización de la interfaz si es necesario
-    if st.session_state.get('force_rerun', False):
-        st.session_state.force_rerun = False
-        st.rerun()
-
+    time.sleep(0.1)
+    st.rerun()
 # ==============================================
 # Pestaña de Estadísticas (Mejorada)
 # ==============================================
@@ -1193,25 +1289,46 @@ def stats_tab():
     
     data = analyze_data()
     
+    # Mostrar información de depuración
+    if data['errors']:
+        with st.expander("⚠️ Errores de procesamiento (click para ver)"):
+            for error in data['errors']:
+                st.error(error)
+    
+    # Mostrar resumen de depuración
+    with st.expander("🔍 Información de depuración"):
+        st.write(f"Total de entradas en historial: {len(st.session_state.pomodoro_state['session_history'])}")
+        st.write(f"Total de entradas procesadas: {len(data['raw_data'])}")
+        st.write(f"Total de errores: {len(data['errors'])}")
+        st.write("Historial completo:")
+        st.write(st.session_state.pomodoro_state['session_history'])
+    
     # Mostrar métricas principales
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        total_minutes = sum(data['activities'].values())
-        st.metric("Tiempo Total", f"{total_minutes/60:.1f} horas")
+        total_hours = sum(data['activities'].values())
+        st.metric("Tiempo Total", f"{total_hours:.2f} horas")
     
     with col2:
         total_sessions = len(data['raw_data'])
         st.metric("Sesiones Totales", total_sessions)
     
     with col3:
-        avg_session = total_minutes / total_sessions if total_sessions > 0 else 0
+        avg_session = total_hours * 60 / total_sessions if total_sessions > 0 else 0
         st.metric("Duración Promedio", f"{avg_session:.1f} min")
     
     with col4:
-        unique_days = len(data['daily_total'])
+        # Para daily_total, necesitamos manejar tanto strings como objetos date
+        unique_dates = set()
+        for date_key in data['daily_total'].keys():
+            if isinstance(date_key, str):
+                unique_dates.add(date_key)
+            elif isinstance(date_key, (datetime.date, datetime.datetime)):
+                unique_dates.add(date_key.strftime("%Y-%m-%d"))
+        unique_days = len(unique_dates)
         st.metric("Días Activos", unique_days)
-    
+        
     # Selector de pestañas
     tab1, tab2, tab3, tab4 = st.tabs(["Visión General", "Tendencias", "Distribución", "Tabla Resumen"])
     
@@ -1221,27 +1338,30 @@ def stats_tab():
         with col1:
             # Gráfico de distribución de actividades
             if data['activities']:
-                fig = px.pie(
-                    values=list(data['activities'].values()), 
-                    names=list(data['activities'].keys()),
-                    title="Distribución de Actividades"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                # Filtrar actividades con tiempo significativo
+                filtered_activities = {k: v for k, v in data['activities'].items() if v > 0.1}
+                
+                if filtered_activities:
+                    fig = px.pie(
+                        values=list(filtered_activities.values()), 
+                        names=list(filtered_activities.keys()),
+                        title="Distribución de Actividades (horas)"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No hay datos significativos para mostrar")
             else:
                 st.info("No hay datos para mostrar")
         
         with col2:
             # Gráfico de tiempo por proyecto
-            project_data = defaultdict(float)
-            for r in data['raw_data']:
-                if r['project']:
-                    project_data[r['project']] += r['duration']
+            project_data = {k: v for k, v in data['projects'].items() if v > 0.1}
             
             if project_data:
                 fig = px.pie(
                     values=list(project_data.values()), 
                     names=list(project_data.keys()),
-                    title="Distribución por Proyecto"
+                    title="Distribución por Proyecto (horas)"
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -1254,15 +1374,15 @@ def stats_tab():
         if data['raw_data']:
             # Agrupar por fecha
             df_dates = pd.DataFrame([
-                {'date': r['date'], 'minutes': r['duration']} 
+                {'date': r['date'], 'hours': r['duration']} 
                 for r in data['raw_data']
             ])
             daily_totals = df_dates.groupby('date').sum().reset_index()
             
             fig = px.line(
-                daily_totals, x='date', y='minutes',
+                daily_totals, x='date', y='hours',
                 title="Evolución del Tiempo por Día",
-                labels={'date': 'Fecha', 'minutes': 'Minutos'}
+                labels={'date': 'Fecha', 'hours': 'Horas'}
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -1273,27 +1393,34 @@ def stats_tab():
         
         if data['raw_data']:
             # Crear matriz para heatmap
-            activities = sorted(set(r['activity'] for r in data['raw_data']))
+            activities = sorted(set(r['activity'] for r in data['raw_data'] if r['activity']))
             projects = sorted(set(r['project'] for r in data['raw_data'] if r['project']))
             
-            # Crear matriz de minutos por actividad y proyecto
+            # Crear matriz de horas por actividad y proyecto
             heatmap_data = np.zeros((len(activities), len(projects)))
             
             for r in data['raw_data']:
-                if r['project']:
-                    act_idx = activities.index(r['activity'])
-                    proj_idx = projects.index(r['project'])
-                    heatmap_data[act_idx, proj_idx] += r['duration']
+                if r['project'] and r['activity']:
+                    try:
+                        act_idx = activities.index(r['activity'])
+                        proj_idx = projects.index(r['project'])
+                        heatmap_data[act_idx, proj_idx] += r['duration']
+                    except (ValueError, IndexError):
+                        # Ignorar entradas que no estén en las listas
+                        pass
             
-            # Crear heatmap
-            fig = px.imshow(
-                heatmap_data,
-                labels=dict(x="Proyecto", y="Actividad", color="Minutos"),
-                x=projects,
-                y=activities,
-                title="Distribución de Tiempo por Actividad y Proyecto"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Crear heatmap solo si hay datos
+            if np.sum(heatmap_data) > 0:
+                fig = px.imshow(
+                    heatmap_data,
+                    labels=dict(x="Proyecto", y="Actividad", color="Horas"),
+                    x=projects,
+                    y=activities,
+                    title="Distribución de Tiempo por Actividad y Proyecto"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No hay datos suficientes para el heatmap")
         else:
             st.info("No hay datos suficientes para el heatmap")
     
@@ -1305,13 +1432,23 @@ def stats_tab():
             df_display = pd.DataFrame([{
                 'Fecha': r['date'].strftime("%Y-%m-%d"),
                 'Hora': f"{r['hour']:02d}:00",
-                'Duración (min)': r['duration'],
+                'Duración (horas)': round(r['duration'], 2),
                 'Actividad': r['activity'],
                 'Proyecto': r['project'],
                 'Tarea': r['task']
             } for r in data['raw_data']])
             
             st.dataframe(df_display, use_container_width=True)
+            
+            # Botón para exportar datos
+            if st.button("Exportar datos a CSV"):
+                csv = df_display.to_csv(index=False)
+                st.download_button(
+                    label="Descargar CSV",
+                    data=csv,
+                    file_name="sesiones_pomodoro.csv",
+                    mime="text/csv"
+                )
         else:
             st.info("No hay sesiones registradas")
 
@@ -1340,28 +1477,54 @@ def tasks_tab():
     # Filtros
     col1, col2, col3 = st.columns(3)
     with col1:
+        # Inicializar filtro de actividad si no existe
+        if 'filter_activity' not in state:
+            state['filter_activity'] = "Todas"
+            
         filter_activity = st.selectbox(
             "Filtrar por actividad",
             ["Todas"] + state['activities'],
-            key="filter_activity"
+            index=0 if state['filter_activity'] == "Todas" else (state['activities'].index(state['filter_activity']) + 1 if state['filter_activity'] in state['activities'] else 0),
+            key="filter_activity_selector"
         )
+        state['filter_activity'] = filter_activity
+        
     with col2:
+        # Inicializar filtro de proyecto si no existe
+        if 'filter_project' not in state:
+            state['filter_project'] = "Todos"
+            
         available_projects = ["Todos"] + [p['name'] for p in state['projects']]
         if filter_activity != "Todas":
             available_projects = ["Todos"] + [p['name'] for p in state['projects'] if p['activity'] == filter_activity]
         
+        # Encontrar el índice del proyecto actual en el filtro
+        try:
+            project_index = available_projects.index(state['filter_project'])
+        except ValueError:
+            project_index = 0
+            
         filter_project = st.selectbox(
             "Filtrar por proyecto",
             available_projects,
-            key="filter_project"
+            index=project_index,
+            key="filter_project_selector"
         )
+        state['filter_project'] = filter_project
+        
     with col3:
+        # Inicializar filtro de estado si no existe
+        if 'task_status_filter' not in state:
+            state['task_status_filter'] = "Todas"
+            
         task_status = st.radio(
             "Estado",
             ["Todas", "Pendientes", "Completadas"],
+            index=["Todas", "Pendientes", "Completadas"].index(state['task_status_filter']),
             horizontal=True,
-            key="task_status"
+            key="task_status_selector"
         )
+        state['task_status_filter'] = task_status
     
     # Aplicar filtros y mostrar tareas
     display_filtered_tasks(filter_activity, filter_project, task_status)
@@ -1375,7 +1538,7 @@ def show_achievements():
     state = st.session_state.pomodoro_state
     achievements = state['achievements']
     
-    st.subheader("🏆 Logros y Estadísticas")
+    st.subheader("🏆 Logros and Estadísticas")
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -1573,47 +1736,53 @@ def info_tab():
         ### Versión
         Estás usando la versión 1.0.0 de Pomodoro Pro
         """)
-
 # ==============================================
 # Barra lateral (Mejorada)
 # ==============================================
-
 def check_alerts():
-    """Verifica y muestra alertas importantes en la barra lateral"""
+    """Verifica alertas y notificaciones para el usuario"""
     state = st.session_state.pomodoro_state
     alerts = []
+    
+    # Verificar tareas próximas a vencer
     today = date.today()
-    
-    # 1. Verificar tareas próximas a vencer (hoy o próximos 3 días)
-    for task in state.get('tasks', []):
-        if not task.get('completed', False) and task.get('deadline'):
+    for task in state['tasks']:
+        # Manejar tanto string como objeto date en el deadline
+        if isinstance(task['deadline'], str):
             try:
-                if isinstance(task['deadline'], str):
-                    deadline = datetime.datetime.strptime(task['deadline'], "%Y-%m-%d").date()
-                else:
-                    deadline = task['deadline']
-                    
-                days_remaining = (deadline - today).days
-                
-                if days_remaining == 0:
-                    alerts.append(f"⏰ Hoy: {task.get('name', 'Tarea sin nombre')}")
-                elif 0 < days_remaining <= 3:
-                    alerts.append(f"⚠️ En {days_remaining}d: {task.get('name', 'Tarea sin nombre')}")
-                elif days_remaining < 0:
-                    alerts.append(f"❌ Vencida hace {-days_remaining}d: {task.get('name', 'Tarea sin nombre')}")
+                deadline = datetime.datetime.strptime(task['deadline'], "%Y-%m-%d").date()
             except (ValueError, TypeError):
-                # Manejar formatos de fecha inválidos
                 continue
+        else:
+            deadline = task['deadline']
+        
+        days_until_due = (deadline - today).days
+        if 0 <= days_until_due <= 2:
+            alerts.append(f"📅 Tarea '{task['name']}' vence en {days_until_due} días")
     
-    # 2. Verificar si hay sesiones de trabajo completadas recientemente
-    if state.get('session_history'):
-        last_session = state['session_history'][-1]
-        session_date = datetime.datetime.strptime(last_session['Fecha'], "%Y-%m-%d").date()
-        if (today - session_date).days == 0:
-            alerts.append(f"✅ Hoy completaste {last_session['Tiempo Activo (min)']} minutos de trabajo")
+    # Verificar si hay sesiones de estudio hoy
+    today_str = today.strftime("%Y-%m-%d")
+    sessions_today = 0
+    for session in state['session_history']:
+        # Manejar diferentes formatos de fecha en el historial
+        session_date = session['Fecha']
+        if isinstance(session_date, str):
+            if session_date == today_str:
+                sessions_today += 1
+        elif isinstance(session_date, (datetime.date, datetime.datetime)):
+            session_date_str = session_date.strftime("%Y-%m-%d") if isinstance(session_date, datetime.date) else session_date.date().strftime("%Y-%m-%d")
+            if session_date_str == today_str:
+                sessions_today += 1
+    
+    if sessions_today == 0:
+        alerts.append("ℹ️ Aún no has tenido sesiones de estudio hoy")
+    
+    # Verificar racha de estudio
+    if state['achievements']['streak_days'] > 0:
+        alerts.append(f"🔥 ¡Llevas una racha de {state['achievements']['streak_days']} días!")
     
     return alerts
-
+    
 def sidebar():
     """Muestra la barra lateral con navegación y controles"""
     # Mostrar sección de autenticación
@@ -1627,15 +1796,12 @@ def sidebar():
     with st.sidebar:
         st.title("Pomodoro Pro 🍅")
         
-        # Mostrar alertas
+        # Mostrar alertas si existen
         alerts = check_alerts()
         if alerts:
             st.subheader("🔔 Alertas")
             for alert in alerts:
                 st.warning(alert, icon="⚠️")
-        else:
-            st.subheader("🔔 Alertas")
-            st.info("No hay alertas en este momento")
         
         # Navegación por pestañas
         st.subheader("Navegación")
@@ -1667,12 +1833,7 @@ def sidebar():
         # Cerrar sesión
         st.divider()
         if st.button("🚪 Cerrar Sesión", key="logout"):
-            st.session_state.authenticated = False
-            st.session_state.username = None
-            st.session_state.pomodoro_state = get_default_state()
-            st.success("Sesión cerrada exitosamente")
-            st.session_state.force_rerun = True
-
+            logout()
 # ==============================================
 # Función principal (Mejorada)
 # ==============================================
