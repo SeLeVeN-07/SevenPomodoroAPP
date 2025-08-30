@@ -1977,9 +1977,9 @@ def sidebar():
         # Header con logo y nombre
         col1, col2 = st.columns([1, 3])
         with col1:
-            st.image("https://via.placeholder.com/40", width=40)  # Reemplazar con tu logo
+            st.image("🍅" width=40)  # Reemplazar con tu logo
         with col2:
-            st.title("PyDash")
+            st.title("Pomodoro Pro")
         
         st.divider()
         
