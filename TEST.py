@@ -1420,7 +1420,7 @@ def create_session_table():
     )
 
     def dashboard_tab():
-    """Pestaña de Dashboard unificado con métricas y gráficos"""
+    "Pestaña de Dashboard unificado con métricas y gráficos"
     st.title("📊 Dashboard de Productividad")
     
     # Mostrar métricas principales
