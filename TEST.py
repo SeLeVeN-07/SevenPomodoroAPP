@@ -1977,9 +1977,9 @@ def sidebar():
         # Header con logo y nombre
         col1, col2 = st.columns([1, 3])
         with col1:
-            st.title("SeLeVeN")  # Reemplazar con tu logo
+            st.image("https://via.placeholder.com/40", width=40)  # Reemplazar con tu logo
         with col2:
-            st.title("🍅")
+            st.title("PyDash")
         
         st.divider()
         
@@ -2000,11 +2000,29 @@ def sidebar():
                 st.warning(alert, icon="⚠️")
             st.divider()
         
-        # Información rápida de progreso
+        # Información rápida de progreso - CORREGIDO
         st.subheader("Progreso Hoy", anchor=False)
-        today = date.today().strftime("%Y-%m-%d")
-        today_sessions = [s for s in state['session_history'] if s.get('Fecha') == today]
-        today_hours = sum(s.get('Tiempo Activo (horas)', 0) for s in today_sessions)
+        today = datetime.datetime.now().date()
+        
+        # Filtrar sesiones de hoy correctamente
+        today_sessions = []
+        for session in state['session_history']:
+            # Manejar diferentes formatos de fecha
+            session_date = session.get('Fecha')
+            
+            # Convertir a objeto date si es string
+            if isinstance(session_date, str):
+                try:
+                    session_date = datetime.datetime.strptime(session_date, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+            
+            # Si ya es objeto date, comparar directamente
+            if isinstance(session_date, datetime.date) and session_date == today:
+                today_sessions.append(session)
+        
+        # Calcular horas totales de hoy
+        today_hours = sum(float(session.get('Tiempo Activo (horas)', 0)) for session in today_sessions)
         
         st.metric("Horas hoy", f"{today_hours:.2f}")
         
