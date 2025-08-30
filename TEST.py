@@ -1979,7 +1979,7 @@ def sidebar():
         with col1:
             st.title("SeLeVeN")  # Reemplazar con tu logo
         with col2:
-            st.title("Pomodoro")
+            st.title("🍅")
         
         st.divider()
         
