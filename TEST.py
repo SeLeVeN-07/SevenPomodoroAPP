@@ -591,6 +591,29 @@ def analyze_data():
     print(f"Tiempo total en actividades: {sum(data['activities'].values())} horas")
     
     return data
+
+def play_alarm_sound():
+    """Reproduce un sonido de alarma usando el archivo local"""
+    try:
+        # Leer el archivo de audio local
+        audio_file = open("mixkit-bell-notification-933.wav", "rb")
+        audio_bytes = audio_file.read()
+        audio_file.close()
+        
+        # Codificar en base64 para incrustarlo en HTML
+        audio_base64 = base64.b64encode(audio_bytes).decode()
+        
+        # Crear el elemento de audio HTML
+        sound_html = f"""
+        <audio autoplay>
+            <source src="data:audio/wav;base64,{audio_base64}" type="audio/wav">
+        </audio>
+        """
+        st.components.v1.html(sound_html, height=0)
+    except FileNotFoundError:
+        st.error("Archivo de sonido no encontrado. Asegúrate de que 'mixkit-bell-notification-933.wav' esté en el directorio principal.")
+    except Exception as e:
+        st.error(f"Error al reproducir el sonido: {str(e)}")
     
 def on_close():
     """Función que se ejecuta al cerrar la aplicación"""
@@ -823,7 +846,7 @@ def create_dashboard_charts():
             activities = list(data['activities'].keys())
             hours = list(data['activities'].values())
             
-            # Crear ángulos equidistantes
+            # Crear ángeles equidistantes
             angles = np.linspace(0, 2*np.pi, len(activities), endpoint=False)
             
             # Crear gráfico polar
@@ -1388,25 +1411,18 @@ def timer_tab():
                     if state['session_count'] >= state['total_sessions']:
                         st.success("¡Todas las sesiones completadas!")
                         state['session_count'] = 0
-                        state['current_phase'] = "Trabajo"
-                        state['remaining_time'] = state['work_duration']
-                        state['timer_running'] = False
-                        state['timer_paused'] = False
-                        save_to_supabase()  # Guardar estado
-                        st.session_state.force_rerun = True
                 
-                # Determinar siguiente fase
+                # Determinar siguiente fase pero NO iniciarla automáticamente
                 state['current_phase'] = determine_next_phase(was_work)
                 state['remaining_time'] = get_phase_duration(state['current_phase'])
                 state['total_active_time'] = 0
-                st.success(f"¡Fase completada! Iniciando: {state['current_phase']}")
+                state['timer_running'] = False  # Detener el temporizador
+                state['timer_paused'] = False
                 
-                # Mostrar notificación toast
-                if was_work:
-                    st.toast("¡Pomodoro completado! Tómate un descanso.", icon="🎉")
-                else:
-                    st.toast("¡Descanso completado! Volvamos al trabajo.", icon="💪")
+                # Reproducir sonido de alarma
+                play_alarm_sound()
                 
+                st.success(f"¡Fase completada! Presiona 'Iniciar' para comenzar {state['current_phase']}")
                 save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
             else:
@@ -1857,7 +1873,7 @@ def about_tab():
 
 def info_tab():
     """Muestra la pestaña de información"""
-    st.title("ℹ️ Información y Ayuda")
+    st.title("ℹ️ Información and Ayuda")
 
     tab1, tab2, tab3 = st.tabs(["Instrucciones", "FAQ", "Contacto"])
 
