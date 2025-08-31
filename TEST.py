@@ -690,7 +690,7 @@ def edit_task_modal():
             
             new_priority = st.selectbox(
                 "Prioridad",
-                ["Baja", "Media", "Alta", "Urgente"],
+                ["Baja", 'Media', "Alta", "Urgente"],
                 index=["Baja", "Media", "Alta", "Urgente"].index(task['priority'])
             )
             
@@ -1118,12 +1118,12 @@ def timer_tab():
     state = st.session_state.pomodoro_state
     
     # Inicializar variables de control del temporizador si no existen
-    if 'timer_start' not in st.session_state:
-        st.session_state.timer_start = None
-    if 'last_update' not in st.session_state:
-        st.session_state.last_update = None
-    if 'paused_time' not in st.session_state:
-        st.session_state.paused_time = None
+    if state['timer_start'] is None:
+        state['timer_start'] = None
+    if state['last_update'] is None:
+        state['last_update'] = None
+    if state['paused_time'] is None:
+        state['paused_time'] = None
     
     # Mostrar materia actual si está en modo estudio
     if state['study_mode'] and state['current_activity']:
@@ -1309,8 +1309,8 @@ def timer_tab():
                 state['start_time'] = datetime.datetime.now()
                 state['total_active_time'] = 0
                 # Iniciar el temporizador
-                st.session_state.timer_start = time.time()
-                st.session_state.last_update = time.time()
+                state['timer_start'] = time.time()
+                state['last_update'] = time.time()
                 save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
 
@@ -1320,15 +1320,15 @@ def timer_tab():
             if state['timer_running'] and not state['timer_paused']:
                 state['timer_paused'] = True
                 state['paused_time'] = time.time()
-                st.session_state.paused_time = time.time()
+                state['paused_time'] = time.time()
                 save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
             elif state['timer_paused']:
                 state['timer_paused'] = False
                 # Ajustar el tiempo de inicio para compensar la pausa
-                pause_duration = time.time() - st.session_state.paused_time
-                st.session_state.timer_start += pause_duration
-                st.session_state.last_update = time.time()
+                pause_duration = time.time() - state['paused_time']
+                state['timer_start'] += pause_duration
+                state['last_update'] = time.time()
                 save_to_supabase()  # Guardar estado
                 st.session_state.force_rerun = True
 
@@ -1377,9 +1377,9 @@ def timer_tab():
             state['total_active_time'] = 0
             state['start_time'] = None
             state['paused_time'] = None
-            st.session_state.timer_start = None
-            st.session_state.last_update = None
-            st.session_state.paused_time = None
+            state['timer_start'] = None
+            state['last_update'] = None
+            state['paused_time'] = None
             st.success("Temporizador reiniciado")
             save_to_supabase()  # Guardar estado
             st.session_state.force_rerun = True
@@ -1391,10 +1391,10 @@ def timer_tab():
     if state['timer_running'] and not state['timer_paused']:
         current_time = time.time()
         
-        # Solo actualizar si ha pasado al menos 1 segundo
-        if current_time - st.session_state.last_update >= 1.0:
-            elapsed = current_time - st.session_state.last_update
-            st.session_state.last_update = current_time
+        # Solo actualizar si last_update no es None y ha pasado al menos 1 segundo
+        if state['last_update'] is not None and current_time - state['last_update'] >= 1.0:
+            elapsed = current_time - state['last_update']
+            state['last_update'] = current_time
 
             state['remaining_time'] -= elapsed
             state['total_active_time'] += elapsed
@@ -2080,6 +2080,11 @@ def main():
     # Inicializar variables de control
     if 'force_rerun' not in st.session_state:
         st.session_state.force_rerun = False
+    
+    # Cargar datos desde Supabase si el usuario está autenticado
+    if check_authentication() and not st.session_state.get('data_loaded', False):
+        if load_from_supabase():
+            st.session_state.data_loaded = True
     
     # Barra lateral mejorada
     sidebar()
